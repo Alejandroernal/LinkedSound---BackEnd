@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  password         String
+  firstName        String
+  lastName         String
+  nickname         String    @unique
+  profileImage     String?
+  role             String    @default("Artista")
+  description      String?
+  soundcloudUrl    String?
+  spotifyUrl       String?
+  instagramUrl     String?
+  soundcloudHandle String?
+  location         String
+  country          String?
+  province         String?
+  city             String?
+  streetAddress    String?
+  latitude         Float?
+  longitude        Float?
+  status           String    @default("Active")
+  reportsCount     Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  genres           ProfileGenre[]
+  tracks           Track[]
+  events           Event[]
+  sentInteractions Interaction[] @relation("SentInteractions")
+  receivedInteractions Interaction[] @relation("ReceivedInteractions")
+  matchesAsUser1   Match[]       @relation("User1Matches")
+  matchesAsUser2   Match[]       @relation("User2Matches")
+  sentReports      UserReport[]  @relation("ReporterReports")
+  receivedReports  UserReport[]  @relation("ReportedReports")
+  sentMessages     Message[]     @relation("SentMessages")
+  conversationsAsUser1 Conversation[] @relation("ConversationUser1")
+  conversationsAsUser2 Conversation[] @relation("ConversationUser2")
+  activityLogs     UserActivityLog[]
+  notifications    Notification[]
+}
+
+model Genre {
+  id          String         @id @default(uuid())
+  name        String         @unique
+  description String?
+  createdAt   DateTime       @default(now())
+
+  profileGenres ProfileGenre[]
+  eventGenres   EventGenre[]
+}
+
+// Clase intermedia / Tabla asociativa para Perfil <-> Generos (N:M)
+model ProfileGenre {
+  userId    String
+  genreId   String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  genre     Genre    @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([userId, genreId])
+}
+
+// Clase intermedia / Tabla asociativa para Evento <-> Generos (N:M)
+model EventGenre {
+  eventId   String
+  genreId   String
+  createdAt DateTime @default(now())
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  genre     Genre    @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, genreId])
+}
+
+model Track {
+  id             String   @id @default(uuid())
+  title          String
+  plays          String   @default("0")
+  duration       String   @default("0:00")
+  genre          String?
+  audioUrl       String?
+  soundcloudLink String?
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventId        String?
+  event          Event?   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+}
+
+model Event {
+  id             String       @id @default(uuid())
+  title          String
+  nickname       String
+  role           String
+  eventDate      String
+  eventTime      String?
+  venue          String?
+  ticketUrl      String?
+  isFinished     Boolean      @default(false)
+  description    String?
+  profileImage   String?
+  location       String
+  country        String?
+  province       String?
+  city           String?
+  streetAddress  String?
+  latitude       Float?
+  longitude      Float?
+  status         String       @default("Active")
+  reportsCount   Int          @default(0)
+  soundcloudUrl  String?
+  spotifyUrl     String?
+  instagramUrl   String?
+  ownerId        String
+  owner          User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  genres         EventGenre[]
+  tracks         Track[]
+  reports        UserReport[] @relation("EventReports")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Interaction {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  isLike     Boolean
+  createdAt  DateTime @default(now())
+
+  sender     User     @relation("SentInteractions", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User     @relation("ReceivedInteractions", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+}
+
+model Match {
+  id              String   @id @default(uuid())
+  user1Id         String
+  user2Id         String
+  affinityPercent String?
+  createdAt       DateTime @default(now())
+
+  user1           User     @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2           User     @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
+
+  @@unique([user1Id, user2Id])
+}
+
+model Conversation {
+  id        String    @id @default(uuid())
+  user1Id   String
+  user2Id   String
+  pinned    Boolean   @default(false)
+  muted     Boolean   @default(false)
+  blocked   Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user1     User      @relation("ConversationUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2     User      @relation("ConversationUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([user1Id, user2Id])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  text           String
+  read           Boolean      @default(false)
+  attachmentUrl  String?
+  attachmentType String?
+  attachmentName String?
+  attachmentSize String?
+  createdAt      DateTime     @default(now())
+}
+
+model UserReport {
+  id              String   @id @default(uuid())
+  reporterUserId  String
+  reportedUserId  String?
+  reportedEventId String?
+  reason          String
+  details         String
+  status          String   @default("Pending")
+  severity        String   @default("Medium")
+  origin          String   @default("Discovery")
+  targetType      String
+  adminComment    String?
+  createdAt       DateTime @default(now())
+
+  reporter        User     @relation("ReporterReports", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reportedUser    User?    @relation("ReportedReports", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  reportedEvent   Event?   @relation("EventReports", fields: [reportedEventId], references: [id], onDelete: SetNull)
+}
+
+model UserActivityLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  ip        String
+  device    String
+  module    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  type      String
+  linkPage  String?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
