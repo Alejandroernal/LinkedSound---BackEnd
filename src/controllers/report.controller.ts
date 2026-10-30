@@ -1,9 +1,14 @@
 import type { Request, Response } from 'express'
 import { prisma } from '../config/prisma.js'
 
+const getReportModel = () => {
+  return (prisma as any).report || (prisma as any).userReport
+}
+
 export const getReports = async (_req: Request, res: Response) => {
   try {
-    const reports = await prisma.userReport.findMany({
+    const reportModel = getReportModel()
+    const reports = await reportModel.findMany({
       include: {
         reporter: {
           select: {
@@ -34,10 +39,10 @@ export const getReports = async (_req: Request, res: Response) => {
       },
     })
 
-    const formatted = reports.map((r) => {
+    const formatted = reports.map((r: any) => {
       const reporterName = r.reporter
         ? r.reporter.nickname || `${r.reporter.firstName} ${r.reporter.lastName}`.trim()
-        : 'Usuario Anónimo'
+        : 'Usuario Anonimo'
 
       let reportedTargetName = 'Desconocido'
       if (r.targetType === 'Evento' && r.reportedEvent) {
@@ -101,8 +106,7 @@ export const createReport = async (req: Request, res: Response) => {
       })
     }
 
-    // Reporter: usuario autenticado o primer usuario activo
-    let reporterUserId = (req as any).user?.id
+    let reporterUserId = (req as any).user?.userId || (req as any).user?.id || req.body.reporterUserId
 
     if (!reporterUserId) {
       const activeUser = await prisma.user.findFirst({
@@ -118,7 +122,6 @@ export const createReport = async (req: Request, res: Response) => {
       }
     }
 
-    // Buscar si el objetivo corresponde a un usuario o a un evento
     let reportedUserId: string | null = null
     let reportedEventId: string | null = null
 
@@ -148,7 +151,8 @@ export const createReport = async (req: Request, res: Response) => {
       }
     }
 
-    const createdReport = await prisma.userReport.create({
+    const reportModel = getReportModel()
+    const createdReport = await reportModel.create({
       data: {
         reporterUserId,
         reportedUserId,
@@ -182,7 +186,8 @@ export const updateReport = async (req: Request, res: Response) => {
     const id = String(req.params.id)
     const { status, adminComment, severity } = req.body
 
-    const existing = await prisma.userReport.findUnique({
+    const reportModel = getReportModel()
+    const existing = await reportModel.findUnique({
       where: { id },
     })
 
@@ -193,11 +198,19 @@ export const updateReport = async (req: Request, res: Response) => {
       })
     }
 
-    const updated = await prisma.userReport.update({
+    // Regla de negocio: El comentario del administrador es obligatorio al resolver o desestimar
+    if ((status === 'Resolved' || status === 'Dismissed') && (!adminComment || !String(adminComment).trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'El comentario de resolución o justificación del Administrador es obligatorio.',
+      })
+    }
+
+    const updated = await reportModel.update({
       where: { id },
       data: {
         ...(status ? { status } : {}),
-        ...(adminComment !== undefined ? { adminComment } : {}),
+        ...(adminComment !== undefined ? { adminComment: adminComment ? String(adminComment).trim() : null } : {}),
         ...(severity ? { severity } : {}),
       },
     })

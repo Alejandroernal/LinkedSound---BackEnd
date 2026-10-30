@@ -1,6 +1,8 @@
 import type { Response } from 'express'
 import { prisma } from '../config/prisma.js'
 import type { AuthenticatedRequest } from '../middlewares/auth.middleware.js'
+import { calculateAffinity } from '../services/affinity.service.js'
+import { formatUserResponse } from './auth.controller.js'
 
 export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -67,6 +69,41 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
     const isMatch = Boolean(targetInteraction && targetInteraction.isLike === true)
 
     if (!isMatch) {
+      // Obtener datos del remitente para notificar al receptor
+      const senderUser = await prisma.user.findUnique({
+        where: { id: senderId },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          nickname: true,
+        },
+      })
+
+      const senderDisplayName =
+        senderUser?.nickname || `${senderUser?.firstName} ${senderUser?.lastName}`.trim() || 'Un creador'
+
+      // Evitar crear notificaciones duplicadas activas para la misma solicitud
+      const existingNotif = await prisma.notification.findFirst({
+        where: {
+          userId: targetUserId,
+          type: 'match_request',
+          message: { contains: senderDisplayName },
+        },
+      })
+
+      if (!existingNotif) {
+        await prisma.notification.create({
+          data: {
+            userId: targetUserId,
+            title: 'Solicitud de Match',
+            message: `${senderDisplayName} quiere conectar y colaborar contigo.`,
+            type: 'match_request',
+            linkPage: 'Discovery',
+          },
+        })
+      }
+
       return res.status(200).json({
         success: true,
         isMatch: false,
@@ -76,6 +113,28 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
 
     // HAY MATCH MUTUO: Crear Match y Conversacion persistente
     const [u1, u2] = [senderId, targetUserId].sort()
+
+    // Calcular afinidad real basada en Artistas de Spotify y Generos
+    const [user1Data, user2Data] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: u1 },
+        include: {
+          genres: { include: { genre: true } },
+          favoriteArtists: { include: { artist: true } },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: u2 },
+        include: {
+          genres: { include: { genre: true } },
+          favoriteArtists: { include: { artist: true } },
+        },
+      }),
+    ])
+
+    const formattedU1 = formatUserResponse(user1Data)
+    const formattedU2 = formatUserResponse(user2Data)
+    const affinity = calculateAffinity(formattedU1 || {}, formattedU2 || {})
 
     const match = await prisma.match.upsert({
       where: {
@@ -87,9 +146,11 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       create: {
         user1Id: u1,
         user2Id: u2,
-        affinityPercent: '95%',
+        affinityPercent: affinity.percentage,
       },
-      update: {},
+      update: {
+        affinityPercent: affinity.percentage,
+      },
     })
 
     const conversation = await prisma.conversation.upsert({
@@ -125,14 +186,14 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
         {
           userId: senderId,
           title: `Nuevo Match con ${targetDisplayName}`,
-          message: `Has conectado con ${targetDisplayName}. Pueden conversar en Mensajes.`,
+          message: `Has conectado con ${targetDisplayName} (${affinity.percentage} afinidad). Pueden conversar en Mensajes.`,
           type: 'match',
           linkPage: 'Messages',
         },
         {
           userId: targetUserId,
           title: `Nuevo Match con ${currentDisplayName}`,
-          message: `Has conectado con ${currentDisplayName}. Pueden conversar en Mensajes.`,
+          message: `Has conectado con ${currentDisplayName} (${affinity.percentage} afinidad). Pueden conversar en Mensajes.`,
           type: 'match',
           linkPage: 'Messages',
         },
@@ -143,7 +204,13 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       success: true,
       isMatch: true,
       message: 'Es un Match!',
-      match,
+      match: {
+        ...match,
+        affinityPercent: affinity.percentage,
+        commonArtists: affinity.commonArtists,
+        commonGenres: affinity.commonGenres,
+        summary: affinity.summary,
+      },
       conversation: {
         id: conversation.id,
         name: targetDisplayName,
@@ -155,9 +222,16 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
         time: 'Ahora',
         unread: 1,
         profileImage: targetUser.profileImage || '',
-        location: targetUser.location || '',
+        location: targetUser.location?.formattedAddress || '',
       },
-      partner: targetUser,
+      partner: {
+        ...targetUser,
+        location: targetUser.location?.formattedAddress || '',
+        match: affinity.percentage,
+        commonArtists: affinity.commonArtists,
+        commonGenres: affinity.commonGenres,
+        affinitySummary: affinity.summary,
+      },
     })
   } catch (error: any) {
     console.error('Error al registrar like:', error)
@@ -262,7 +336,7 @@ export const getMatches = async (req: AuthenticatedRequest, res: Response) => {
         name: partnerName,
         role: partner.role || 'Artista',
         profileImage: partner.profileImage || '',
-        location: partner.location || '',
+        location: partner.location?.formattedAddress || '',
         affinityPercent: m.affinityPercent || '95%',
         createdAt: m.createdAt,
       }
@@ -311,3 +385,35 @@ export const getUserInteractions = async (req: AuthenticatedRequest, res: Respon
     })
   }
 }
+
+export const resetInteractions = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const currentUserId = req.user?.userId
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
+    }
+
+    // Eliminar las interacciones de swipe registradas por el usuario actual
+    // para permitirle ver nuevamente perfiles previamente rechazados o aceptados
+    // sin generar el match en concreto y preservando conversaciones ya creadas.
+    await prisma.interaction.deleteMany({
+      where: {
+        senderId: currentUserId,
+      },
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Perfiles de descubrimiento reiniciados exitosamente.',
+    })
+  } catch (error: any) {
+    console.error('Error al reiniciar interacciones:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error al reiniciar las interacciones de descubrimiento.',
+      error: error.message,
+    })
+  }
+}
+

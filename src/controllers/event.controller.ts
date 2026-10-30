@@ -2,10 +2,72 @@ import type { Request, Response } from 'express'
 import { prisma } from '../config/prisma.js'
 import { uploadBase64ToCloudinary } from '../services/upload.service.js'
 
+const toSlug = (str: string) =>
+  str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+
+export const formatEventResponse = (ev: any) => {
+  if (!ev) return null
+  const loc = ev.location || {}
+  const rawLoc = typeof ev.location === 'string' ? ev.location : ''
+
+  const dateStr = ev.eventDate instanceof Date
+    ? ev.eventDate.toISOString().split('T')[0]
+    : String(ev.eventDate || '')
+
+  return {
+    id: ev.id,
+    title: ev.title,
+    nickname: ev.nickname || ev.title,
+    role: ev.eventType?.name || ev.role || 'Evento Live',
+    eventTypeId: ev.eventTypeId || null,
+    eventDate: dateStr,
+    eventTime: ev.eventTime || '22:00',
+    venue: ev.venue || loc.name || 'Venue Principal',
+    ticketUrl: ev.ticketUrl || null,
+    isFinished: ev.status === 'Finished' || Boolean(ev.isFinished),
+    description: ev.description || '',
+    profileImage:
+      ev.profileImage ||
+      'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=900&q=80',
+    location: loc.formattedAddress || rawLoc || '',
+    country: loc.country || ev.country || '',
+    province: loc.province || ev.province || '',
+    city: loc.city || ev.city || '',
+    streetAddress: loc.streetAddress || ev.streetAddress || '',
+    latitude: loc.latitude ?? ev.latitude ?? null,
+    longitude: loc.longitude ?? ev.longitude ?? null,
+    locationId: ev.locationId || loc.id || null,
+    locationData: typeof ev.location === 'object' && ev.location !== null ? ev.location : null,
+    status: ev.status,
+    reportsCount: ev.reportsCount,
+    soundcloudUrl: ev.soundcloudUrl || '',
+    spotifyUrl: ev.spotifyUrl || '',
+    instagramUrl: ev.instagramUrl || '',
+    interestGenres: Array.isArray(ev.genres)
+      ? ev.genres.map((g: any) => g.genre?.name || g.name || g)
+      : ev.interestGenres || [],
+    tags: Array.isArray(ev.genres)
+      ? ev.genres.map((g: any) => g.genre?.name || g.name || g)
+      : ev.tags || [],
+    isProfile: false,
+    itemRole: 'Evento',
+    badge: 'Evento',
+    match: '100%',
+    owner: ev.owner ? `${ev.owner.firstName} ${ev.owner.lastName}`.trim() || ev.owner.nickname : 'Organizador',
+    ownerId: ev.ownerId,
+    ownerNickname: ev.owner?.nickname || '',
+    tracks: ev.tracks || [],
+    createdAt: ev.createdAt,
+    updatedAt: ev.updatedAt,
+  }
+}
+
 export const getEvents = async (req: Request, res: Response) => {
   try {
     const events = await prisma.event.findMany({
       include: {
+        location: true,
+        eventType: true,
         genres: {
           include: {
             genre: true,
@@ -19,6 +81,7 @@ export const getEvents = async (req: Request, res: Response) => {
             lastName: true,
             email: true,
             profileImage: true,
+            locationId: true,
             location: true,
           },
         },
@@ -29,45 +92,7 @@ export const getEvents = async (req: Request, res: Response) => {
       },
     })
 
-    const formatted = events.map((ev) => ({
-      id: ev.id,
-      title: ev.title,
-      nickname: ev.nickname || ev.title,
-      role: ev.role || 'Evento',
-      eventDate: ev.eventDate,
-      eventTime: ev.eventTime || '22:00',
-      venue: ev.venue || 'Venue Principal',
-      ticketUrl: ev.ticketUrl || null,
-      isFinished: ev.isFinished,
-      description: ev.description || '',
-      profileImage:
-        ev.profileImage ||
-        'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=900&q=80',
-      location: ev.location,
-      country: ev.country || '',
-      province: ev.province || '',
-      city: ev.city || '',
-      streetAddress: ev.streetAddress || '',
-      latitude: ev.latitude,
-      longitude: ev.longitude,
-      status: ev.status,
-      reportsCount: ev.reportsCount,
-      soundcloudUrl: ev.soundcloudUrl || '',
-      spotifyUrl: ev.spotifyUrl || '',
-      instagramUrl: ev.instagramUrl || '',
-      interestGenres: ev.genres.map((g) => g.genre.name),
-      tags: ev.genres.map((g) => g.genre.name),
-      isProfile: false,
-      itemRole: 'Evento',
-      badge: 'Evento',
-      match: '100%',
-      owner: ev.owner ? `${ev.owner.firstName} ${ev.owner.lastName}`.trim() || ev.owner.nickname : 'Organizador',
-      ownerId: ev.ownerId,
-      ownerNickname: ev.owner?.nickname || '',
-      tracks: ev.tracks,
-      createdAt: ev.createdAt,
-      updatedAt: ev.updatedAt,
-    }))
+    const formatted = events.map(formatEventResponse)
 
     return res.status(200).json({
       success: true,
@@ -116,10 +141,10 @@ export const createEvent = async (req: Request, res: Response) => {
     }
 
     const trimmedTitle = String(title).trim()
-    if (trimmedTitle.length < 3 || trimmedTitle.length > 80) {
+    if (trimmedTitle.length < 3 || trimmedTitle.length > 50) {
       return res.status(400).json({
         success: false,
-        message: 'El título del evento debe tener entre 3 y 80 caracteres.',
+        message: 'El título del evento debe tener entre 3 y 50 caracteres para preservar el formato.',
       })
     }
 
@@ -141,11 +166,39 @@ export const createEvent = async (req: Request, res: Response) => {
     }
 
     // Identificar el organizador / usuario creador
-    let ownerId = (req as any).user?.id
+    let ownerId: string | null = (req as any).user?.userId || (req as any).user?.id || null
 
-    if (!ownerId) {
+    if (!ownerId && req.body.ownerId && typeof req.body.ownerId === 'string' && req.body.ownerId.trim()) {
+      ownerId = req.body.ownerId.trim()
+    }
+
+    let verifiedOwner = ownerId
+      ? await prisma.user.findUnique({
+          where: { id: ownerId },
+          select: { id: true, nickname: true, firstName: true, lastName: true },
+        })
+      : null
+
+    if (!verifiedOwner && req.body.ownerEmail && typeof req.body.ownerEmail === 'string' && req.body.ownerEmail.trim()) {
+      verifiedOwner = await prisma.user.findUnique({
+        where: { email: req.body.ownerEmail.trim() },
+        select: { id: true, nickname: true, firstName: true, lastName: true },
+      })
+    }
+
+    if (!verifiedOwner && req.body.ownerNickname && typeof req.body.ownerNickname === 'string' && req.body.ownerNickname.trim()) {
+      verifiedOwner = await prisma.user.findFirst({
+        where: { nickname: { equals: req.body.ownerNickname.trim(), mode: 'insensitive' } },
+        select: { id: true, nickname: true, firstName: true, lastName: true },
+      })
+    }
+
+    if (verifiedOwner) {
+      ownerId = verifiedOwner.id
+    } else {
       const fallbackUser = await prisma.user.findFirst({
         where: { status: 'Active' },
+        select: { id: true },
       })
       if (!fallbackUser) {
         return res.status(400).json({
@@ -176,28 +229,54 @@ export const createEvent = async (req: Request, res: Response) => {
       ? ticketUrl.trim()
       : null
 
+    const createdLocation = await prisma.location.create({
+      data: {
+        name: venue ? String(venue).trim().slice(0, 40) : null,
+        formattedAddress: String(location).trim(),
+        country: country ? String(country).trim().slice(0, 60) : null,
+        province: province ? String(province).trim().slice(0, 60) : null,
+        city: city ? String(city).trim().slice(0, 60) : null,
+        streetAddress: streetAddress ? String(streetAddress).trim().slice(0, 50) : null,
+        latitude: typeof latitude === 'number' ? latitude : null,
+        longitude: typeof longitude === 'number' ? longitude : null,
+      },
+    })
+
+    let eventTypeId: string | null = null
+    if (role && typeof role === 'string' && role.trim()) {
+      const foundType = await prisma.eventType.findFirst({
+        where: { name: { equals: role.trim(), mode: 'insensitive' } },
+      })
+      if (foundType) eventTypeId = foundType.id
+    }
+
     const createdEvent = await prisma.event.create({
       data: {
         title: trimmedTitle,
         nickname: (nickname ? String(nickname).trim() : trimmedTitle),
-        role: (role ? String(role).trim() : 'Evento Live').slice(0, 50),
-        eventDate: String(eventDate).trim(),
+        eventTypeId,
+        eventDate: new Date(String(eventDate).trim() + 'T00:00:00Z'),
         eventTime: (eventTime ? String(eventTime).trim() : '22:00').slice(0, 8),
-        venue: venue ? String(venue).trim().slice(0, 60) : null,
+        venue: venue ? String(venue).trim().slice(0, 40) : null,
         ticketUrl: finalTicketUrl,
-        description: description ? String(description).trim().slice(0, 500) : null,
+        description: description ? String(description).trim().slice(0, 250) : null,
         profileImage: finalProfileImage,
-        location: String(location).trim(),
-        country: country ? String(country).trim().slice(0, 60) : null,
-        province: province ? String(province).trim().slice(0, 60) : null,
-        city: city ? String(city).trim().slice(0, 60) : null,
-        streetAddress: streetAddress ? String(streetAddress).trim().slice(0, 80) : null,
-        latitude: typeof latitude === 'number' ? latitude : null,
-        longitude: typeof longitude === 'number' ? longitude : null,
+        locationId: createdLocation.id,
         soundcloudUrl: soundcloudUrl ? String(soundcloudUrl).trim() : null,
         spotifyUrl: spotifyUrl ? String(spotifyUrl).trim() : null,
         instagramUrl: instagramUrl ? String(instagramUrl).trim() : null,
         ownerId,
+      },
+      include: {
+        location: true,
+        eventType: true,
+        genres: {
+          include: {
+            genre: true,
+          },
+        },
+        owner: true,
+        tracks: true,
       },
     })
 
@@ -209,7 +288,7 @@ export const createEvent = async (req: Request, res: Response) => {
         const genreRecord = await prisma.genre.upsert({
           where: { name: trimmed },
           update: {},
-          create: { name: trimmed },
+          create: { name: trimmed, slug: toSlug(trimmed) },
         })
 
         await prisma.eventGenre.create({
@@ -235,7 +314,7 @@ export const createEvent = async (req: Request, res: Response) => {
     return res.status(201).json({
       success: true,
       message: 'Evento creado exitosamente en la base de datos.',
-      event: createdEvent,
+      event: formatEventResponse(createdEvent),
     })
   } catch (error: any) {
     console.error('Error al crear evento:', error)
@@ -276,9 +355,11 @@ export const updateEvent = async (req: Request, res: Response) => {
     }
 
     // Verificar permisos de usuario
-    const userId = (req as any).user?.id
+    const tokenUserId = (req as any).user?.userId || (req as any).user?.id
     const userRole = (req as any).user?.role
-    if (userId && existing.ownerId !== userId && userRole !== 'Administrador') {
+    const requestUserId = tokenUserId || req.body.ownerId || req.body.userId
+
+    if (tokenUserId && existing.ownerId !== tokenUserId && userRole !== 'Administrador') {
       return res.status(403).json({
         success: false,
         message: 'No tienes permisos para modificar este evento.',
@@ -309,10 +390,10 @@ export const updateEvent = async (req: Request, res: Response) => {
 
     if (title !== undefined) {
       const trimmedTitle = String(title).trim()
-      if (trimmedTitle.length < 3 || trimmedTitle.length > 80) {
+      if (trimmedTitle.length < 3 || trimmedTitle.length > 50) {
         return res.status(400).json({
           success: false,
-          message: 'El título del evento debe tener entre 3 y 80 caracteres.',
+          message: 'El título del evento debe tener entre 3 y 50 caracteres para preservar el formato.',
         })
       }
       updateData.title = trimmedTitle
@@ -335,27 +416,66 @@ export const updateEvent = async (req: Request, res: Response) => {
           message: `El año del evento debe ser de 4 dígitos entre ${currentYear} y 2099.`,
         })
       }
-      updateData.eventDate = String(eventDate).trim()
+      updateData.eventDate = new Date(String(eventDate).trim() + 'T00:00:00Z')
     }
 
-    if (role !== undefined) updateData.role = String(role).trim().slice(0, 50)
+    if (role !== undefined) {
+      const foundType = await prisma.eventType.findFirst({
+        where: { name: { equals: String(role).trim(), mode: 'insensitive' } },
+      })
+      if (foundType) updateData.eventTypeId = foundType.id
+    }
     if (eventTime !== undefined) updateData.eventTime = String(eventTime).trim().slice(0, 8)
-    if (venue !== undefined) updateData.venue = venue ? String(venue).trim().slice(0, 60) : null
+    if (venue !== undefined) updateData.venue = venue ? String(venue).trim().slice(0, 40) : null
     if (ticketUrl !== undefined) {
       updateData.ticketUrl = ticketUrl && typeof ticketUrl === 'string' && ticketUrl.trim()
         ? ticketUrl.trim()
         : null
     }
     if (description !== undefined) {
-      updateData.description = description ? String(description).trim().slice(0, 500) : null
+      updateData.description = description ? String(description).trim().slice(0, 250) : null
     }
-    if (location !== undefined) updateData.location = String(location).trim()
-    if (country !== undefined) updateData.country = country ? String(country).trim().slice(0, 60) : null
-    if (province !== undefined) updateData.province = province ? String(province).trim().slice(0, 60) : null
-    if (city !== undefined) updateData.city = city ? String(city).trim().slice(0, 60) : null
-    if (streetAddress !== undefined) updateData.streetAddress = streetAddress ? String(streetAddress).trim().slice(0, 80) : null
-    if (typeof latitude === 'number') updateData.latitude = latitude
-    if (typeof longitude === 'number') updateData.longitude = longitude
+    const hasLocationData =
+      location !== undefined ||
+      country !== undefined ||
+      province !== undefined ||
+      city !== undefined ||
+      streetAddress !== undefined ||
+      latitude !== undefined ||
+      longitude !== undefined ||
+      venue !== undefined
+
+    if (hasLocationData) {
+      if (existing.locationId) {
+        await prisma.location.update({
+          where: { id: existing.locationId },
+          data: {
+            ...(venue !== undefined ? { name: venue ? String(venue).trim().slice(0, 40) : null } : {}),
+            ...(location !== undefined ? { formattedAddress: String(location).trim() } : {}),
+            ...(country !== undefined ? { country: country ? String(country).trim().slice(0, 60) : null } : {}),
+            ...(province !== undefined ? { province: province ? String(province).trim().slice(0, 60) : null } : {}),
+            ...(city !== undefined ? { city: city ? String(city).trim().slice(0, 60) : null } : {}),
+            ...(streetAddress !== undefined ? { streetAddress: streetAddress ? String(streetAddress).trim().slice(0, 50) : null } : {}),
+            ...(typeof latitude === 'number' ? { latitude } : {}),
+            ...(typeof longitude === 'number' ? { longitude } : {}),
+          },
+        })
+      } else if (location || city || country) {
+        const newLoc = await prisma.location.create({
+          data: {
+            name: venue ? String(venue).trim().slice(0, 40) : null,
+            formattedAddress: String(location || [streetAddress, city, province, country].filter(Boolean).join(', ') || 'Sin especificar').trim(),
+            country: country ? String(country).trim().slice(0, 60) : null,
+            province: province ? String(province).trim().slice(0, 60) : null,
+            city: city ? String(city).trim().slice(0, 60) : null,
+            streetAddress: streetAddress ? String(streetAddress).trim().slice(0, 50) : null,
+            latitude: typeof latitude === 'number' ? latitude : null,
+            longitude: typeof longitude === 'number' ? longitude : null,
+          },
+        })
+        updateData.locationId = newLoc.id
+      }
+    }
 
     if (profileImage !== undefined) {
       if (profileImage && typeof profileImage === 'string' && profileImage.trim()) {
@@ -379,6 +499,8 @@ export const updateEvent = async (req: Request, res: Response) => {
       where: { id },
       data: updateData,
       include: {
+        location: true,
+        eventType: true,
         genres: {
           include: {
             genre: true,
@@ -408,7 +530,7 @@ export const updateEvent = async (req: Request, res: Response) => {
         const genreRecord = await prisma.genre.upsert({
           where: { name: trimmed },
           update: {},
-          create: { name: trimmed },
+          create: { name: trimmed, slug: toSlug(trimmed) },
         })
 
         await prisma.eventGenre.create({
@@ -420,7 +542,7 @@ export const updateEvent = async (req: Request, res: Response) => {
       }
     }
 
-    const activeUserId = userId || existing.ownerId
+    const activeUserId = requestUserId || existing.ownerId
     await prisma.userActivityLog.create({
       data: {
         userId: activeUserId,
@@ -434,7 +556,7 @@ export const updateEvent = async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       message: 'Evento actualizado exitosamente.',
-      event: updated,
+      event: formatEventResponse(updated),
     })
   } catch (error: any) {
     console.error('Error al actualizar evento:', error)
@@ -461,15 +583,38 @@ export const deleteEvent = async (req: Request, res: Response) => {
       })
     }
 
+    const tokenUserId = (req as any).user?.userId || (req as any).user?.id
+    const userRole = (req as any).user?.role
+    const requestUserId = tokenUserId || req.body?.ownerId || req.body?.userId
+
+    if (tokenUserId && existing.ownerId !== tokenUserId && userRole !== 'Administrador') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para eliminar este evento.',
+      })
+    }
+
+    // Verificar margen de 24 horas desde su creación
+    const createdAtTime = new Date(existing.createdAt).getTime()
+    const nowTime = Date.now()
+    const hoursElapsed = (nowTime - createdAtTime) / (1000 * 60 * 60)
+
+    if (hoursElapsed > 24 && userRole !== 'Administrador') {
+      return res.status(403).json({
+        success: false,
+        message: 'El plazo de 24 horas para eliminar este evento ha expirado. No es posible eliminarlo.',
+      })
+    }
+
     await prisma.event.delete({
       where: { id },
     })
 
-    const userId = (req as any).user?.id || existing.ownerId
+    const userId = tokenUserId || requestUserId || existing.ownerId
     await prisma.userActivityLog.create({
       data: {
         userId,
-        action: `Eliminó el evento "${existing.title}"`,
+        action: `Eliminó el evento "${existing.title}" dentro del plazo permitido`,
         ip: req.ip || '127.0.0.1',
         device: (req.headers['user-agent'] as string) || 'Web Browser',
         module: 'Explorer',

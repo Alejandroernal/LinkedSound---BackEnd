@@ -11,11 +11,13 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 const connectionString = process.env.DATABASE_URL || ''
+const requiresSsl = connectionString.includes('sslmode=require') || connectionString.includes(':6543')
+
 const pool =
   globalForPrisma.pool ??
   new pg.Pool({
     connectionString,
-    ssl: { rejectUnauthorized: false },
+    ssl: requiresSsl ? { rejectUnauthorized: false } : false,
   })
 
 const adapter = new PrismaPg(pool)

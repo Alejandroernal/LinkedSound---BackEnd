@@ -20,8 +20,12 @@ export const getConversations = async (req: Request, res: Response) => {
         OR: [{ user1Id: currentUserId }, { user2Id: currentUserId }],
       },
       include: {
-        user1: true,
-        user2: true,
+        user1: {
+          include: { location: true },
+        },
+        user2: {
+          include: { location: true },
+        },
         messages: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -45,9 +49,10 @@ export const getConversations = async (req: Request, res: Response) => {
       const accent = ACCENT_COLORS[index % ACCENT_COLORS.length]
 
       // Solo es unread si el ultimo mensaje no fue leido y no fue enviado por el usuario actual
+      const isReadVal = (lastMsg as any)?.isRead !== undefined ? (lastMsg as any).isRead : Boolean((lastMsg as any)?.read)
       const isUnread = Boolean(
         lastMsg &&
-        !lastMsg.read &&
+        !isReadVal &&
         lastMsg.senderId !== currentUserId
       )
 
@@ -65,7 +70,7 @@ export const getConversations = async (req: Request, res: Response) => {
         muted: conv.muted,
         blocked: conv.blocked,
         profileImage: partner?.profileImage || '',
-        location: partner?.location || '',
+        location: partner?.location?.formattedAddress || '',
       }
     })
 
@@ -119,9 +124,9 @@ export const getMessages = async (req: Request, res: Response) => {
       where: {
         conversationId,
         senderId: { not: currentUserId },
-        read: false,
+        isRead: false,
       },
-      data: { read: true },
+      data: { isRead: true, readAt: new Date() } as any,
     })
 
     const messages = await prisma.message.findMany({
@@ -188,6 +193,10 @@ export const sendMessage = async (req: Request, res: Response) => {
 
     const conv = await prisma.conversation.findUnique({
       where: { id: conversationId },
+      include: {
+        user1: { select: { id: true, firstName: true, lastName: true, nickname: true } },
+        user2: { select: { id: true, firstName: true, lastName: true, nickname: true } },
+      },
     })
     if (!conv) {
       return res.status(404).json({ success: false, message: 'Conversación no encontrada.' })
@@ -202,6 +211,9 @@ export const sendMessage = async (req: Request, res: Response) => {
     }
 
     const senderId = currentUserId
+    const recipientUser = conv.user1Id === currentUserId ? conv.user2 : conv.user1
+    const senderUser = conv.user1Id === currentUserId ? conv.user1 : conv.user2
+    const senderDisplayName = senderUser?.nickname || `${senderUser?.firstName || ''} ${senderUser?.lastName || ''}`.trim() || 'Un usuario'
 
     // Subir archivo adjunto a Cloudinary si viene en formato base64
     let finalAttachmentUrl = attachmentUrl || null
@@ -213,13 +225,13 @@ export const sendMessage = async (req: Request, res: Response) => {
       data: {
         conversationId,
         senderId,
-        text: String(text || '').trim(),
+        text: text && String(text).trim().length > 0 ? String(text).trim() : null,
         attachmentUrl: finalAttachmentUrl,
         attachmentName: attachmentName || null,
         attachmentType: attachmentType || null,
         attachmentSize: attachmentSize || null,
-        read: false,
-      },
+        isRead: false,
+      } as any,
     })
 
     // Actualizar tiempo de última modificación en la conversación
@@ -227,6 +239,26 @@ export const sendMessage = async (req: Request, res: Response) => {
       where: { id: conversationId },
       data: { updatedAt: new Date() },
     })
+
+    // Crear notificación para el destinatario
+    if (recipientUser?.id) {
+      const previewText = created.text
+        ? (created.text.length > 50 ? `${created.text.slice(0, 50)}...` : created.text)
+        : 'Te ha enviado un archivo adjunto.'
+
+      await prisma.notification.create({
+        data: {
+          userId: recipientUser.id,
+          title: `Nuevo mensaje de ${senderDisplayName}`,
+          message: previewText,
+          type: 'message',
+          linkPage: 'Messages',
+          isRead: false,
+        },
+      }).catch((err) => {
+        console.error('Error al generar notificacion de mensaje:', err)
+      })
+    }
 
     const timeStr = new Date(created.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 

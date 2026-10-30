@@ -3,6 +3,7 @@ import { config } from '../config/environment.js'
 
 export interface TokenPayload {
   userId: string
+  id?: string
   email: string
   role: string
 }
@@ -11,9 +12,26 @@ export const generateToken = (payload: TokenPayload): string => {
   const options: SignOptions = {
     expiresIn: config.jwt.expiresIn as any,
   }
-  return jwt.sign(payload, config.jwt.secret, options)
+  const effectiveId = payload.userId || payload.id || ''
+  return jwt.sign(
+    {
+      userId: effectiveId,
+      id: effectiveId,
+      email: payload.email,
+      role: payload.role,
+    },
+    config.jwt.secret,
+    options
+  )
 }
 
 export const verifyToken = (token: string): TokenPayload => {
-  return jwt.verify(token, config.jwt.secret) as TokenPayload
+  const decoded = jwt.verify(token, config.jwt.secret) as any
+  const effectiveId = decoded.userId || decoded.id || ''
+  return {
+    userId: effectiveId,
+    id: effectiveId,
+    email: decoded.email,
+    role: decoded.role,
+  }
 }

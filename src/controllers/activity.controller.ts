@@ -74,7 +74,7 @@ export const createActivity = async (req: Request, res: Response) => {
       })
     }
 
-    let userId = (req as any).user?.id
+    let userId = (req as any).user?.userId || (req as any).user?.id || req.body.userId
 
     if (!userId) {
       const activeUser = await prisma.user.findFirst({
