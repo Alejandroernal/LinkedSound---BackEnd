@@ -19,9 +19,16 @@ export const formatUserResponse = (user: any) => {
         id: t.id,
         title: t.title || 'Track Destacado',
         plays: typeof t.plays === 'number' ? `${t.plays.toLocaleString()} reproducciones` : String(t.plays || '0'),
-        duration: t.duration || 'SoundCloud',
+        duration: t.duration || '0:30',
         genre: t.genre?.name || 'Destacado',
+        audioUrl: t.audioUrl || '',
         soundcloudLink: t.soundcloudLink || '',
+        format: t.format || 'MP3',
+        snippetType: t.snippetType || 'Snippet Demo',
+        bpm: t.bpm || '',
+        key: t.key || '',
+        fileSize: t.fileSize || '',
+        order: typeof t.order === 'number' ? t.order : 0,
       }))
     : []
 
@@ -39,22 +46,6 @@ export const formatUserResponse = (user: any) => {
     interestGenres: Array.isArray(user.genres)
       ? user.genres.map((g: any) => g.genre?.name || g.name || g)
       : user.interestGenres || [],
-    favoriteArtists: Array.isArray(user.favoriteArtists)
-      ? user.favoriteArtists.map((fa: any) => ({
-          id: fa.artist?.id || fa.id,
-          spotifyId: fa.artist?.spotifyId || fa.spotifyId || '',
-          name: fa.artist?.name || fa.name || '',
-          imageUrl: fa.artist?.imageUrl || fa.imageUrl || null,
-          spotifyUrl: fa.artist?.spotifyUrl || fa.spotifyUrl || '',
-          genres: Array.isArray(fa.artist?.genres)
-            ? fa.artist.genres
-            : Array.isArray(fa.genres)
-            ? fa.genres
-            : [],
-        }))
-      : Array.isArray(user.favoriteArtists)
-      ? user.favoriteArtists
-      : [],
     tracks: formattedTracks,
   }
 }
@@ -68,6 +59,7 @@ export const register = async (req: Request, res: Response) => {
       lastName,
       nickname,
       role,
+      accountRole,
       location,
       country,
       province,
@@ -83,7 +75,6 @@ export const register = async (req: Request, res: Response) => {
       profileImage,
       tracks,
       trackUrl,
-      favoriteArtists,
     } = req.body
 
     if (!email || !password || !firstName || !lastName || !nickname || !location) {
@@ -138,6 +129,7 @@ export const register = async (req: Request, res: Response) => {
         lastName,
         nickname,
         role: role || 'Artista',
+        accountRole: 'Usuario',
         profileImage: finalProfileImage,
         locationId: createdLocation.id,
         description,
@@ -165,6 +157,7 @@ export const register = async (req: Request, res: Response) => {
         lastName: true,
         nickname: true,
         role: true,
+        accountRole: true,
         description: true,
         locationId: true,
         location: true,
@@ -185,18 +178,52 @@ export const register = async (req: Request, res: Response) => {
             },
           },
         },
-        favoriteArtists: {
-          include: {
-            artist: true,
-          },
-        },
       },
     })
+
+    // Guardar tracks de muestra subidos durante el registro (mínimo 1, máximo 5)
+    const incomingTracks = Array.isArray(tracks) ? tracks : []
+    const defaultGenre = await prisma.genre.findFirst({ select: { id: true } })
+    if (incomingTracks.length > 0) {
+      for (let i = 0; i < Math.min(incomingTracks.length, 5); i++) {
+        const t = incomingTracks[i]
+        await prisma.track.create({
+          data: {
+            title: (t.title || `Demo 0${i + 1}`).trim(),
+            audioUrl: t.audioUrl || null,
+            soundcloudLink: t.soundcloudLink || null,
+            duration: t.duration || '0:30',
+            format: t.format || (t.audioUrl?.toLowerCase().includes('.wav') ? 'WAV' : t.audioUrl?.toLowerCase().includes('.flac') ? 'FLAC' : 'MP3'),
+            snippetType: t.snippetType || `0${i + 1} - DEMO EXCLUSIVA`,
+            bpm: t.bpm || null,
+            key: t.key || null,
+            fileSize: t.fileSize || null,
+            order: i,
+            plays: typeof t.plays === 'number' ? t.plays : (Math.floor(Math.random() * 150) + 20),
+            genreId: defaultGenre?.id || null,
+            userId: newUser.id,
+          },
+        })
+      }
+    } else if (typeof trackUrl === 'string' && trackUrl.trim()) {
+      await prisma.track.create({
+        data: {
+          title: `${newUser.nickname || 'Usuario'} - Track Destacado`,
+          duration: 'SoundCloud',
+          plays: 120,
+          soundcloudLink: trackUrl.trim(),
+          userId: newUser.id,
+          genreId: defaultGenre?.id || null,
+          order: 0,
+        },
+      })
+    }
 
     const token = generateToken({
       userId: newUser.id,
       email: newUser.email,
       role: newUser.role || 'Artista',
+      accountRole: newUser.accountRole || 'Usuario',
     })
 
     res.status(201).json({
@@ -231,7 +258,7 @@ export const login = async (req: Request, res: Response) => {
         location: true,
         tracks: {
           include: { genre: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { order: 'asc' },
         },
         genres: {
           select: {
@@ -241,11 +268,6 @@ export const login = async (req: Request, res: Response) => {
                 name: true,
               },
             },
-          },
-        },
-        favoriteArtists: {
-          include: {
-            artist: true,
           },
         },
       },
@@ -270,6 +292,7 @@ export const login = async (req: Request, res: Response) => {
       userId: user.id,
       email: user.email,
       role: user.role || 'Artista',
+      accountRole: user.accountRole || 'Usuario',
     })
 
     const { password: _, ...userWithoutPassword } = user
@@ -319,11 +342,6 @@ export const getMe = async (req: AuthenticatedRequest, res: Response) => {
             },
           },
         },
-        favoriteArtists: {
-          include: {
-            artist: true,
-          },
-        },
         soundcloudUrl: true,
         spotifyUrl: true,
         instagramUrl: true,
@@ -333,7 +351,7 @@ export const getMe = async (req: AuthenticatedRequest, res: Response) => {
         createdAt: true,
         tracks: {
           include: { genre: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { order: 'asc' },
         },
       },
     })
@@ -372,6 +390,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
       lastName,
       nickname,
       role,
+      accountRole,
       location,
       country,
       province,
@@ -387,7 +406,6 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
       profileImage,
       tracks,
       trackUrl,
-      favoriteArtists,
     } = req.body
 
     if (description !== undefined && description !== null && typeof description === 'string' && description.trim().length > 150) {
@@ -496,7 +514,8 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
         ...(firstName ? { firstName } : {}),
         ...(lastName ? { lastName } : {}),
         ...(nickname ? { nickname } : {}),
-        ...(role ? { role } : {}),
+        ...(role && ['Productor', 'Artista', 'Productor y Artista'].includes(role) ? { role } : {}),
+        ...(accountRole && ['Usuario', 'Administrador'].includes(accountRole) ? { accountRole } : {}),
         ...(description !== undefined ? { description: description ? String(description).trim() : null } : {}),
         ...(soundcloudUrl !== undefined ? { soundcloudUrl: soundcloudUrl ? String(soundcloudUrl).trim() : null } : {}),
         ...(spotifyUrl !== undefined ? { spotifyUrl: spotifyUrl ? String(spotifyUrl).trim() : null } : {}),
@@ -527,6 +546,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
         lastName: true,
         nickname: true,
         role: true,
+        accountRole: true,
         description: true,
         profileImage: true,
         genres: {
@@ -537,11 +557,6 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
                 name: true,
               },
             },
-          },
-        },
-        favoriteArtists: {
-          include: {
-            artist: true,
           },
         },
         soundcloudUrl: true,
@@ -555,28 +570,56 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
       },
     })
 
-    // Gestionar el guardado del Track Destacado si se envió en tracks o trackUrl
-    let extractedTrackUrl: string | null = null
-    if (typeof trackUrl === 'string' && trackUrl.trim()) {
-      extractedTrackUrl = trackUrl.trim()
-    } else if (Array.isArray(tracks) && tracks.length > 0) {
-      const customTrack = tracks.find((t: any) => t.soundcloudLink && typeof t.soundcloudLink === 'string' && t.soundcloudLink.trim())
-      if (customTrack) {
-        extractedTrackUrl = customTrack.soundcloudLink.trim()
+    if (accountRole && ['Usuario', 'Administrador'].includes(accountRole)) {
+      const sysRole = await prisma.role.findUnique({ where: { name: accountRole } })
+      if (sysRole) {
+        await prisma.userRole.deleteMany({ where: { userId: req.user.userId } })
+        await prisma.userRole.create({
+          data: {
+            userId: req.user.userId,
+            roleId: sysRole.id,
+          },
+        })
       }
     }
 
-    if (extractedTrackUrl) {
-      const defaultGenre = await prisma.genre.findFirst({ select: { id: true } })
-      const existingTrack = await prisma.track.findFirst({
+    // Gestionar el guardado de Tracks de Muestra (Audio local o SoundCloud, 1 a 5 tracks)
+    const defaultGenre = await prisma.genre.findFirst({ select: { id: true } })
+
+    if (Array.isArray(tracks) && tracks.length > 0) {
+      await prisma.track.deleteMany({
         where: { userId: req.user.userId },
       })
 
+      for (let i = 0; i < Math.min(tracks.length, 5); i++) {
+        const t = tracks[i]
+        await prisma.track.create({
+          data: {
+            title: (t.title || `Demo 0${i + 1}`).trim(),
+            audioUrl: t.audioUrl || null,
+            soundcloudLink: t.soundcloudLink || null,
+            duration: t.duration || '0:30',
+            format: t.format || (t.audioUrl?.toLowerCase().includes('.wav') ? 'WAV' : t.audioUrl?.toLowerCase().includes('.flac') ? 'FLAC' : 'MP3'),
+            snippetType: t.snippetType || `0${i + 1} - DEMO EXCLUSIVA`,
+            bpm: t.bpm || null,
+            key: t.key || null,
+            fileSize: t.fileSize || null,
+            order: i,
+            plays: typeof t.plays === 'number' ? t.plays : (Math.floor(Math.random() * 150) + 20),
+            genreId: defaultGenre?.id || null,
+            userId: req.user.userId,
+          },
+        })
+      }
+    } else if (typeof trackUrl === 'string' && trackUrl.trim()) {
+      const existingTrack = await prisma.track.findFirst({
+        where: { userId: req.user.userId },
+      })
       if (existingTrack) {
         await prisma.track.update({
           where: { id: existingTrack.id },
           data: {
-            soundcloudLink: extractedTrackUrl,
+            soundcloudLink: trackUrl.trim(),
             title: `${updatedUser.nickname || 'Usuario'} - Track Destacado`,
           },
         })
@@ -587,68 +630,11 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
             plays: 120,
             duration: 'SoundCloud',
             genreId: defaultGenre?.id || null,
-            soundcloudLink: extractedTrackUrl,
+            soundcloudLink: trackUrl.trim(),
             userId: req.user.userId,
+            order: 0,
           },
         })
-      }
-    }
-
-    // Gestionar el guardado de Artistas Favoritos (Spotify)
-    if (Array.isArray(favoriteArtists)) {
-      await prisma.userFavoriteArtist.deleteMany({
-        where: { userId: req.user.userId },
-      })
-
-      for (const item of favoriteArtists) {
-        if (!item || !item.name || typeof item.name !== 'string' || !item.name.trim()) continue
-        const artName = item.name.trim()
-        const spotifyId = item.spotifyId ? String(item.spotifyId).trim() : null
-
-        let artistRecord
-        if (spotifyId) {
-          artistRecord = await prisma.artist.upsert({
-            where: { spotifyId },
-            create: {
-              spotifyId,
-              name: artName,
-              imageUrl: item.imageUrl || null,
-              spotifyUrl: item.spotifyUrl || null,
-              genres: Array.isArray(item.genres) ? item.genres : [],
-            },
-            update: {
-              name: artName,
-              ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
-              ...(item.spotifyUrl ? { spotifyUrl: item.spotifyUrl } : {}),
-              ...(Array.isArray(item.genres) && item.genres.length > 0 ? { genres: item.genres } : {}),
-            },
-          })
-        } else {
-          const existing = await prisma.artist.findFirst({
-            where: { name: { equals: artName, mode: 'insensitive' } },
-          })
-          if (existing) {
-            artistRecord = existing
-          } else {
-            artistRecord = await prisma.artist.create({
-              data: {
-                name: artName,
-                imageUrl: item.imageUrl || null,
-                spotifyUrl: item.spotifyUrl || null,
-                genres: Array.isArray(item.genres) ? item.genres : [],
-              },
-            })
-          }
-        }
-
-        if (artistRecord) {
-          await prisma.userFavoriteArtist.create({
-            data: {
-              userId: req.user.userId,
-              artistId: artistRecord.id,
-            },
-          })
-        }
       }
     }
 
@@ -662,6 +648,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
         lastName: true,
         nickname: true,
         role: true,
+        accountRole: true,
         description: true,
         profileImage: true,
         genres: {
@@ -674,11 +661,6 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
             },
           },
         },
-        favoriteArtists: {
-          include: {
-            artist: true,
-          },
-        },
         soundcloudUrl: true,
         spotifyUrl: true,
         instagramUrl: true,
@@ -689,7 +671,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
         updatedAt: true,
         tracks: {
           include: { genre: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { order: 'asc' },
         },
       },
     })
@@ -729,7 +711,7 @@ export const getGenres = async (_req: Request, res: Response) => {
 export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const currentUserId = req.user?.userId
-    const currentUserRole = req.user?.role
+    const currentUserRole = req.user?.accountRole || req.user?.role
     const includeSelf = req.query.all === 'true' || currentUserRole === 'Administrador'
 
     const users = await prisma.user.findMany({
@@ -741,6 +723,7 @@ export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
         lastName: true,
         nickname: true,
         role: true,
+        accountRole: true,
         description: true,
         profileImage: true,
         locationId: true,
@@ -754,7 +737,7 @@ export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
         updatedAt: true,
         tracks: {
           include: { genre: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { order: 'asc' },
         },
         genres: {
           select: {

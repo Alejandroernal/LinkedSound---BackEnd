@@ -26,7 +26,25 @@ export const formatEventResponse = (ev: any) => {
     ticketUrl: ev.ticketUrl || null,
     isFinished: ev.status === 'Finished' || Boolean(ev.isFinished),
     description: ev.description || '',
+    images: (() => {
+      const relationalImages = Array.isArray(ev.eventImages) && ev.eventImages.length > 0
+        ? ev.eventImages
+            .slice()
+            .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+            .map((ei: any) => ei.image?.url || ei.url)
+            .filter(Boolean)
+        : null
+      return relationalImages && relationalImages.length > 0
+        ? relationalImages
+        : (Array.isArray(ev.images) && ev.images.length > 0
+            ? ev.images
+            : (ev.profileImage
+                ? [ev.profileImage]
+                : ['https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=900&q=80']))
+    })(),
     profileImage:
+      (Array.isArray(ev.eventImages) && ev.eventImages[0]?.image?.url) ||
+      (Array.isArray(ev.images) && ev.images[0]) ||
       ev.profileImage ||
       'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=900&q=80',
     location: loc.formattedAddress || rawLoc || '',
@@ -71,6 +89,14 @@ export const getEvents = async (req: Request, res: Response) => {
         genres: {
           include: {
             genre: true,
+          },
+        },
+        eventImages: {
+          include: {
+            image: true,
+          },
+          orderBy: {
+            order: 'asc',
           },
         },
         owner: {
@@ -209,20 +235,46 @@ export const createEvent = async (req: Request, res: Response) => {
       ownerId = fallbackUser.id
     }
 
-    // Procesar imagen si viene en base64 o URL
-    let finalProfileImage: string | null = null
-    if (profileImage && typeof profileImage === 'string' && profileImage.trim()) {
-      const trimmedImage = profileImage.trim()
-      if (trimmedImage.startsWith('data:image/')) {
-        finalProfileImage = await uploadBase64ToCloudinary(trimmedImage, 'linkedsound/events')
-      } else if (trimmedImage.startsWith('http://') || trimmedImage.startsWith('https://')) {
-        finalProfileImage = trimmedImage
+    // Procesar imágenes (mínimo 1, máximo 5)
+    const rawImages: string[] = Array.isArray(req.body.images) && req.body.images.length > 0
+      ? req.body.images.filter((img: any) => typeof img === 'string' && img.trim())
+      : (profileImage && typeof profileImage === 'string' && profileImage.trim() ? [profileImage.trim()] : [])
+
+    if (rawImages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debes cargar al menos 1 imagen para el evento (mínimo 1, máximo 5).',
+      })
+    }
+
+    if (rawImages.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes cargar más de 5 imágenes para el evento.',
+      })
+    }
+
+    const finalImages: string[] = []
+    for (const imgItem of rawImages) {
+      const trimmed = imgItem.trim()
+      if (trimmed.startsWith('data:image/')) {
+        const uploaded = await uploadBase64ToCloudinary(trimmed, 'linkedsound/events')
+        if (uploaded) finalImages.push(uploaded)
+      } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        finalImages.push(trimmed)
       } else {
         return res.status(400).json({
           success: false,
-          message: 'El formato de la imagen no es válido. Debe ser una imagen o URL válida.',
+          message: 'Uno o más formatos de imagen no son válidos. Debe ser una imagen local o URL válida.',
         })
       }
+    }
+
+    if (finalImages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debes cargar al menos 1 imagen válida para el evento.',
+      })
     }
 
     const finalTicketUrl = ticketUrl && typeof ticketUrl === 'string' && ticketUrl.trim()
@@ -260,7 +312,8 @@ export const createEvent = async (req: Request, res: Response) => {
         venue: venue ? String(venue).trim().slice(0, 40) : null,
         ticketUrl: finalTicketUrl,
         description: description ? String(description).trim().slice(0, 250) : null,
-        profileImage: finalProfileImage,
+        profileImage: finalImages[0],
+        images: finalImages,
         locationId: createdLocation.id,
         soundcloudUrl: soundcloudUrl ? String(soundcloudUrl).trim() : null,
         spotifyUrl: spotifyUrl ? String(spotifyUrl).trim() : null,
@@ -273,6 +326,14 @@ export const createEvent = async (req: Request, res: Response) => {
         genres: {
           include: {
             genre: true,
+          },
+        },
+        eventImages: {
+          include: {
+            image: true,
+          },
+          orderBy: {
+            order: 'asc',
           },
         },
         owner: true,
@@ -298,6 +359,21 @@ export const createEvent = async (req: Request, res: Response) => {
           },
         }).catch(() => {})
       }
+    }
+
+    // Guardar imagenes en tablas Image y EventImage
+    for (let i = 0; i < finalImages.length; i++) {
+      const imgUrl = finalImages[i]
+      const imgRecord = await prisma.image.create({
+        data: { url: imgUrl },
+      })
+      await prisma.eventImage.create({
+        data: {
+          eventId: createdEvent.id,
+          imageId: imgRecord.id,
+          order: i,
+        },
+      }).catch(() => {})
     }
 
     // Registrar log de actividad
@@ -356,7 +432,7 @@ export const updateEvent = async (req: Request, res: Response) => {
 
     // Verificar permisos de usuario
     const tokenUserId = (req as any).user?.userId || (req as any).user?.id
-    const userRole = (req as any).user?.role
+    const userRole = (req as any).user?.accountRole || (req as any).user?.role
     const requestUserId = tokenUserId || req.body.ownerId || req.body.userId
 
     if (tokenUserId && existing.ownerId !== tokenUserId && userRole !== 'Administrador') {
@@ -477,21 +553,67 @@ export const updateEvent = async (req: Request, res: Response) => {
       }
     }
 
-    if (profileImage !== undefined) {
-      if (profileImage && typeof profileImage === 'string' && profileImage.trim()) {
-        const trimmedImage = profileImage.trim()
-        if (trimmedImage.startsWith('data:image/')) {
-          updateData.profileImage = await uploadBase64ToCloudinary(trimmedImage, 'linkedsound/events')
-        } else if (trimmedImage.startsWith('http://') || trimmedImage.startsWith('https://')) {
-          updateData.profileImage = trimmedImage
+    const hasImagesParam = req.body.images !== undefined || profileImage !== undefined
+    if (hasImagesParam) {
+      let rawImagesToUpdate: string[] = []
+      if (Array.isArray(req.body.images)) {
+        rawImagesToUpdate = req.body.images.filter((img: any) => typeof img === 'string' && img.trim())
+      } else if (profileImage && typeof profileImage === 'string' && profileImage.trim()) {
+        rawImagesToUpdate = [profileImage.trim()]
+      }
+
+      if (rawImagesToUpdate.length < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'El evento debe conservar al menos 1 imagen (mínimo 1, máximo 5).',
+        })
+      }
+
+      if (rawImagesToUpdate.length > 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'No puedes cargar más de 5 imágenes para el evento.',
+        })
+      }
+
+      const processedImages: string[] = []
+      for (const imgItem of rawImagesToUpdate) {
+        const trimmed = imgItem.trim()
+        if (trimmed.startsWith('data:image/')) {
+          const uploaded = await uploadBase64ToCloudinary(trimmed, 'linkedsound/events')
+          if (uploaded) processedImages.push(uploaded)
+        } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          processedImages.push(trimmed)
         } else {
           return res.status(400).json({
             success: false,
-            message: 'El formato de la imagen no es válido. Debe ser una imagen o URL válida.',
+            message: 'Uno o más formatos de imagen no son válidos. Debe ser una imagen local o URL válida.',
           })
         }
-      } else {
-        updateData.profileImage = null
+      }
+
+      if (processedImages.length > 0) {
+        updateData.images = processedImages
+        updateData.profileImage = processedImages[0]
+
+        // Sincronizar tabla intermedia EventImage
+        await prisma.eventImage.deleteMany({
+          where: { eventId: id },
+        }).catch(() => {})
+
+        for (let i = 0; i < processedImages.length; i++) {
+          const imgUrl = processedImages[i]
+          const imgRecord = await prisma.image.create({
+            data: { url: imgUrl },
+          })
+          await prisma.eventImage.create({
+            data: {
+              eventId: id,
+              imageId: imgRecord.id,
+              order: i,
+            },
+          }).catch(() => {})
+        }
       }
     }
 
@@ -504,6 +626,14 @@ export const updateEvent = async (req: Request, res: Response) => {
         genres: {
           include: {
             genre: true,
+          },
+        },
+        eventImages: {
+          include: {
+            image: true,
+          },
+          orderBy: {
+            order: 'asc',
           },
         },
         owner: {
@@ -584,7 +714,7 @@ export const deleteEvent = async (req: Request, res: Response) => {
     }
 
     const tokenUserId = (req as any).user?.userId || (req as any).user?.id
-    const userRole = (req as any).user?.role
+    const userRole = (req as any).user?.accountRole || (req as any).user?.role
     const requestUserId = tokenUserId || req.body?.ownerId || req.body?.userId
 
     if (tokenUserId && existing.ownerId !== tokenUserId && userRole !== 'Administrador') {

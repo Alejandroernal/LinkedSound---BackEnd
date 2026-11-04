@@ -114,20 +114,18 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
     // HAY MATCH MUTUO: Crear Match y Conversacion persistente
     const [u1, u2] = [senderId, targetUserId].sort()
 
-    // Calcular afinidad real basada en Artistas de Spotify y Generos
+    // Calcular afinidad real basada en Generos y Roles
     const [user1Data, user2Data] = await Promise.all([
       prisma.user.findUnique({
         where: { id: u1 },
         include: {
           genres: { include: { genre: true } },
-          favoriteArtists: { include: { artist: true } },
         },
       }),
       prisma.user.findUnique({
         where: { id: u2 },
         include: {
           genres: { include: { genre: true } },
-          favoriteArtists: { include: { artist: true } },
         },
       }),
     ])
@@ -207,7 +205,6 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       match: {
         ...match,
         affinityPercent: affinity.percentage,
-        commonArtists: affinity.commonArtists,
         commonGenres: affinity.commonGenres,
         summary: affinity.summary,
       },
@@ -228,7 +225,6 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
         ...targetUser,
         location: targetUser.location?.formattedAddress || '',
         match: affinity.percentage,
-        commonArtists: affinity.commonArtists,
         commonGenres: affinity.commonGenres,
         affinitySummary: affinity.summary,
       },

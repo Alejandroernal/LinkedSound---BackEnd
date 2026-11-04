@@ -69,6 +69,7 @@ model User {
   lastName         String       @db.VarChar(100)
   nickname         String       @unique @db.VarChar(50)
   role             String?      @default("Artista") @db.VarChar(50)
+  accountRole      String       @default("Usuario") @db.VarChar(50)
   profileImage     String?
   description      String?
   soundcloudUrl    String?      @db.VarChar(255)
@@ -86,7 +87,6 @@ model User {
 
   roles                UserRole[]
   genres               ProfileGenre[]
-  favoriteArtists      UserFavoriteArtist[]
   tracks               Track[]
   events               Event[]
   sentInteractions     Interaction[]     @relation("SentInteractions")
@@ -100,6 +100,7 @@ model User {
   conversationsAsUser2 Conversation[]    @relation("ConversationUser2")
   activityLogs         UserActivityLog[]
   notifications        Notification[]
+  userImages           UserImage[]
 
   @@map("User")
 }
@@ -162,32 +163,6 @@ model ProfileGenre {
   @@map("ProfileGenre")
 }
 
-model Artist {
-  id         String               @id @default(uuid()) @db.Uuid
-  spotifyId  String?              @unique @db.VarChar(100)
-  name       String               @db.VarChar(150)
-  imageUrl   String?              @db.VarChar(500)
-  spotifyUrl String?              @db.VarChar(255)
-  genres     String[]             @default([])
-  createdAt  DateTime             @default(now()) @db.Timestamptz
-
-  users      UserFavoriteArtist[]
-
-  @@map("Artist")
-}
-
-model UserFavoriteArtist {
-  userId    String   @db.Uuid
-  artistId  String   @db.Uuid
-  createdAt DateTime @default(now()) @db.Timestamptz
-
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  artist    Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
-
-  @@id([userId, artistId])
-  @@map("UserFavoriteArtist")
-}
-
 model EventGenre {
   eventId   String   @db.Uuid
   genreId   String   @db.Uuid
@@ -209,6 +184,12 @@ model Track {
   genre          Genre?       @relation(fields: [genreId], references: [id], onDelete: SetNull)
   audioUrl       String?      @db.VarChar(500)
   soundcloudLink String?      @db.VarChar(500)
+  format         String?      @db.VarChar(20)
+  snippetType    String?      @db.VarChar(60)
+  bpm            String?      @db.VarChar(30)
+  key            String?      @db.VarChar(30)
+  fileSize       String?      @db.VarChar(50)
+  order          Int?         @default(0)
   userId         String?      @db.Uuid
   user           User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
   eventId        String?      @db.Uuid
@@ -244,6 +225,7 @@ model Event {
   ticketUrl      String?      @db.VarChar(500)
   description    String?
   profileImage   String?
+  images         String[]     @default([])
   locationId     String?      @db.Uuid
   location       Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
   statusId       String?      @db.Uuid
@@ -261,8 +243,47 @@ model Event {
   genres         EventGenre[]
   tracks         Track[]
   reports        Report[]     @relation("EventReports")
+  eventImages    EventImage[]
 
   @@map("Event")
+}
+
+model Image {
+  id          String       @id @default(uuid()) @db.Uuid
+  url         String       @db.Text
+  alt         String?
+  createdAt   DateTime     @default(now()) @db.Timestamptz
+
+  eventImages EventImage[]
+  userImages  UserImage[]
+
+  @@map("Image")
+}
+
+model EventImage {
+  eventId   String   @db.Uuid
+  imageId   String   @db.Uuid
+  order     Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  image     Image    @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, imageId])
+  @@map("EventImage")
+}
+
+model UserImage {
+  userId    String   @db.Uuid
+  imageId   String   @db.Uuid
+  order     Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  image     Image    @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@id([userId, imageId])
+  @@map("UserImage")
 }
 
 model Interaction {

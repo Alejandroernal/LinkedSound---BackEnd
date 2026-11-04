@@ -6,6 +6,7 @@ export interface TokenPayload {
   id?: string
   email: string
   role: string
+  accountRole?: string
 }
 
 export const generateToken = (payload: TokenPayload): string => {
@@ -19,6 +20,7 @@ export const generateToken = (payload: TokenPayload): string => {
       id: effectiveId,
       email: payload.email,
       role: payload.role,
+      accountRole: payload.accountRole || 'Usuario',
     },
     config.jwt.secret,
     options
@@ -33,5 +35,6 @@ export const verifyToken = (token: string): TokenPayload => {
     id: effectiveId,
     email: decoded.email,
     role: decoded.role,
+    accountRole: decoded.accountRole || (decoded.role === 'Administrador' ? 'Administrador' : 'Usuario'),
   }
 }

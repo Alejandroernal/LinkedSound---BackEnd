@@ -8,7 +8,6 @@ import { activityRouter } from './activity.routes.js'
 import { conversationRouter } from './conversation.routes.js'
 import { interactionRouter } from './interaction.routes.js'
 import { notificationRouter } from './notification.routes.js'
-import spotifyRouter from './spotify.routes.js'
 
 export const apiRouter = Router()
 
@@ -21,5 +20,4 @@ apiRouter.use('/activity', activityRouter)
 apiRouter.use('/conversations', conversationRouter)
 apiRouter.use('/interactions', interactionRouter)
 apiRouter.use('/notifications', notificationRouter)
-apiRouter.use('/spotify', spotifyRouter)
 

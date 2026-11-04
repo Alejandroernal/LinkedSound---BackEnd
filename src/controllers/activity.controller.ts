@@ -12,6 +12,7 @@ export const getActivities = async (_req: Request, res: Response) => {
             firstName: true,
             lastName: true,
             role: true,
+            accountRole: true,
           },
         },
       },
@@ -32,7 +33,7 @@ export const getActivities = async (_req: Request, res: Response) => {
       const exactFormatted = `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
 
       const userName = act.user
-        ? act.user.role === 'Administrador'
+        ? (act.user.accountRole === 'Administrador' || act.user.role === 'Administrador')
           ? `Administrador (${act.user.nickname || 'Admin'})`
           : act.user.nickname || `${act.user.firstName} ${act.user.lastName}`.trim()
         : 'Sistema'
