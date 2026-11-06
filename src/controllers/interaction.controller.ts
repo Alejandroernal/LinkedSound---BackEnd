@@ -56,7 +56,29 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       },
     })
 
-    // Comprobar si el otro usuario ya le dio like al usuario actual previamente
+    const [u1, u2] = [senderId, targetUserId].sort()
+
+    // 1. Comprobar si ya existe un match previo registrado entre ambos
+    const existingMatch = await prisma.match.findUnique({
+      where: {
+        user1Id_user2Id: {
+          user1Id: u1,
+          user2Id: u2,
+        },
+      },
+    })
+
+    // 2. Comprobar si ya existe una conversacion previa registrada
+    const existingConv = await prisma.conversation.findUnique({
+      where: {
+        user1Id_user2Id: {
+          user1Id: u1,
+          user2Id: u2,
+        },
+      },
+    })
+
+    // 3. Comprobar si el otro usuario ya le dio like al usuario actual previamente
     const targetInteraction = await prisma.interaction.findUnique({
       where: {
         senderId_receiverId: {
@@ -66,7 +88,11 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       },
     })
 
-    const isMatch = Boolean(targetInteraction && targetInteraction.isLike === true)
+    const isMatch = Boolean(
+      existingMatch ||
+      existingConv ||
+      (targetInteraction && targetInteraction.isLike === true)
+    )
 
     if (!isMatch) {
       // Obtener datos del remitente para notificar al receptor
@@ -111,8 +137,23 @@ export const likeUser = async (req: AuthenticatedRequest, res: Response) => {
       })
     }
 
-    // HAY MATCH MUTUO: Crear Match y Conversacion persistente
-    const [u1, u2] = [senderId, targetUserId].sort()
+    // HAY MATCH MUTUO: Asegurar que ambas direcciones esten registradas con like
+    await prisma.interaction.upsert({
+      where: {
+        senderId_receiverId: {
+          senderId: targetUserId,
+          receiverId: senderId,
+        },
+      },
+      create: {
+        senderId: targetUserId,
+        receiverId: senderId,
+        isLike: true,
+      },
+      update: {
+        isLike: true,
+      },
+    })
 
     // Calcular afinidad real basada en Generos y Roles
     const [user1Data, user2Data] = await Promise.all([
@@ -357,20 +398,32 @@ export const getUserInteractions = async (req: AuthenticatedRequest, res: Respon
     const currentUserId = req.user?.userId
 
     if (!currentUserId) {
-      return res.status(200).json({ success: true, interactions: [] })
+      return res.status(200).json({ success: true, interactions: [], incomingLikes: [] })
     }
 
-    const interactions = await prisma.interaction.findMany({
-      where: { senderId: currentUserId },
-      select: {
-        receiverId: true,
-        isLike: true,
-      },
-    })
+    const [interactions, incomingLikes] = await Promise.all([
+      prisma.interaction.findMany({
+        where: { senderId: currentUserId },
+        select: {
+          receiverId: true,
+          isLike: true,
+        },
+      }),
+      prisma.interaction.findMany({
+        where: {
+          receiverId: currentUserId,
+          isLike: true,
+        },
+        select: {
+          senderId: true,
+        },
+      }),
+    ])
 
     return res.status(200).json({
       success: true,
       interactions,
+      incomingLikes: incomingLikes.map((item) => item.senderId),
     })
   } catch (error: any) {
     console.error('Error al obtener interacciones:', error)
@@ -390,24 +443,96 @@ export const resetInteractions = async (req: AuthenticatedRequest, res: Response
       return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
     }
 
-    // Eliminar las interacciones de swipe registradas por el usuario actual
-    // para permitirle ver nuevamente perfiles previamente rechazados o aceptados
-    // sin generar el match en concreto y preservando conversaciones ya creadas.
+    // CRITICO: Solo eliminar descartes (isLike: false).
+    // NUNCA eliminar likes (isLike: true) porque rompería la reciprocidad y la detección de matches futuros.
     await prisma.interaction.deleteMany({
       where: {
         senderId: currentUserId,
+        isLike: false,
       },
     })
 
     return res.status(200).json({
       success: true,
-      message: 'Perfiles de descubrimiento reiniciados exitosamente.',
+      message: 'Perfiles descartados reiniciados exitosamente.',
     })
   } catch (error: any) {
     console.error('Error al reiniciar interacciones:', error)
     return res.status(500).json({
       success: false,
       message: 'Error al reiniciar las interacciones de descubrimiento.',
+      error: error.message,
+    })
+  }
+}
+
+export const unmatchUser = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const currentUserId = req.user?.userId
+    const { targetUserId } = req.body
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
+    }
+
+    if (!targetUserId) {
+      return res.status(400).json({ success: false, message: 'ID de usuario objetivo requerido.' })
+    }
+
+    const [u1, u2] = [currentUserId, targetUserId].sort()
+
+    // 1. Eliminar conversacion y mensajes asociados
+    const conv = await prisma.conversation.findUnique({
+      where: {
+        user1Id_user2Id: {
+          user1Id: u1,
+          user2Id: u2,
+        },
+      },
+    })
+
+    if (conv) {
+      await prisma.message.deleteMany({ where: { conversationId: conv.id } })
+      await prisma.conversation.delete({ where: { id: conv.id } })
+    }
+
+    // 2. Eliminar Match
+    await prisma.match.deleteMany({
+      where: {
+        user1Id: u1,
+        user2Id: u2,
+      },
+    })
+
+    // 3. Eliminar interacciones entre ambos usuarios
+    await prisma.interaction.deleteMany({
+      where: {
+        OR: [
+          { senderId: currentUserId, receiverId: targetUserId },
+          { senderId: targetUserId, receiverId: currentUserId },
+        ],
+      },
+    })
+
+    // 4. Eliminar notificaciones de match
+    await prisma.notification.deleteMany({
+      where: {
+        OR: [
+          { userId: currentUserId, type: 'match' },
+          { userId: targetUserId, type: 'match' },
+        ],
+      },
+    }).catch(() => {})
+
+    return res.status(200).json({
+      success: true,
+      message: 'Desconexión realizada exitosamente.',
+    })
+  } catch (error: any) {
+    console.error('Error al desconectar usuario:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error al desconectar el usuario.',
       error: error.message,
     })
   }

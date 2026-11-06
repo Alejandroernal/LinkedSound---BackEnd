@@ -75,6 +75,25 @@ export const formatEventResponse = (ev: any) => {
     ownerId: ev.ownerId,
     ownerNickname: ev.owner?.nickname || '',
     tracks: ev.tracks || [],
+    comments: Array.isArray(ev.comments)
+      ? ev.comments.map((c: any) => ({
+          id: c.id,
+          eventId: c.eventId,
+          userId: c.userId,
+          content: c.content,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+          user: c.user
+            ? {
+                id: c.user.id,
+                nickname: c.user.nickname,
+                firstName: c.user.firstName,
+                lastName: c.user.lastName,
+                profileImage: c.user.profileImage,
+              }
+            : null,
+        }))
+      : [],
     createdAt: ev.createdAt,
     updatedAt: ev.updatedAt,
   }
@@ -112,6 +131,22 @@ export const getEvents = async (req: Request, res: Response) => {
           },
         },
         tracks: true,
+        comments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                nickname: true,
+                firstName: true,
+                lastName: true,
+                profileImage: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',
@@ -338,6 +373,22 @@ export const createEvent = async (req: Request, res: Response) => {
         },
         owner: true,
         tracks: true,
+        comments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                nickname: true,
+                firstName: true,
+                lastName: true,
+                profileImage: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
       },
     })
 
@@ -760,6 +811,146 @@ export const deleteEvent = async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       message: 'Error al eliminar el evento.',
+      error: error.message,
+    })
+  }
+}
+
+export const addEventComment = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const { content } = req.body
+
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El contenido del comentario o actualización no puede estar vacío.',
+      })
+    }
+
+    const trimmedContent = content.trim()
+    if (trimmedContent.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'El comentario no puede exceder los 500 caracteres.',
+      })
+    }
+
+    const event = await prisma.event.findUnique({
+      where: { id },
+      select: { id: true, ownerId: true, title: true },
+    })
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado.',
+      })
+    }
+
+    const tokenUserId = (req as any).user?.userId || (req as any).user?.id || req.body.userId
+    const userRole = (req as any).user?.accountRole || (req as any).user?.role || req.body.userRole
+
+    // Restriccion estricta: UNICAMENTE el creador del evento puede colocar comentarios / actualizaciones
+    if (!tokenUserId || (tokenUserId !== event.ownerId && userRole !== 'Administrador')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Únicamente el creador del evento tiene autorización para publicar comentarios o actualizaciones.',
+      })
+    }
+
+    const newComment: any = await (prisma.eventComment as any).create({
+      data: {
+        eventId: id,
+        userId: tokenUserId,
+        content: trimmedContent,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            nickname: true,
+            firstName: true,
+            lastName: true,
+            profileImage: true,
+          },
+        },
+      },
+    })
+
+    // Registrar log de actividad
+    await prisma.userActivityLog.create({
+      data: {
+        userId: tokenUserId,
+        action: `Publicó una actualización en el evento "${event.title}"`,
+        ip: req.ip || '127.0.0.1',
+        device: (req.headers['user-agent'] as string) || 'Web Browser',
+        module: 'Explorer',
+      },
+    }).catch(() => {})
+
+    return res.status(201).json({
+      success: true,
+      message: 'Actualización publicada exitosamente.',
+      comment: {
+        id: newComment.id,
+        eventId: newComment.eventId,
+        userId: newComment.userId,
+        content: newComment.content,
+        createdAt: newComment.createdAt,
+        updatedAt: newComment.updatedAt,
+        user: newComment.user,
+      },
+    })
+  } catch (error: any) {
+    console.error('Error al agregar comentario al evento:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error al registrar el comentario en la base de datos.',
+      error: error.message,
+    })
+  }
+}
+
+export const deleteEventComment = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const commentId = String(req.params.commentId)
+    const tokenUserId = (req as any).user?.userId || (req as any).user?.id || req.body.userId
+    const userRole = (req as any).user?.accountRole || (req as any).user?.role || req.body.userRole
+
+    const comment: any = await (prisma.eventComment as any).findUnique({
+      where: { id: commentId },
+      include: { event: { select: { ownerId: true } } },
+    })
+
+    if (!comment || comment.eventId !== id) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comentario no encontrado.',
+      })
+    }
+
+    if (tokenUserId !== comment.event?.ownerId && tokenUserId !== comment.userId && userRole !== 'Administrador') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes autorización para eliminar esta actualización.',
+      })
+    }
+
+    await prisma.eventComment.delete({
+      where: { id: commentId },
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Actualización eliminada correctamente.',
+    })
+  } catch (error: any) {
+    console.error('Error al eliminar comentario:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar el comentario.',
       error: error.message,
     })
   }

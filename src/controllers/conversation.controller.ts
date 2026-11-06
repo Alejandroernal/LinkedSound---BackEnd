@@ -58,6 +58,8 @@ export const getConversations = async (req: Request, res: Response) => {
 
       return {
         id: conv.id,
+        partnerId: partner?.id || '',
+        partnerUserId: partner?.id || '',
         name: partnerName,
         role: partner?.role || 'Artista',
         avatar: partnerName.slice(0, 2).toUpperCase(),
@@ -286,6 +288,93 @@ export const sendMessage = async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       message: 'Error al enviar el mensaje.',
+      error: error.message,
+    })
+  }
+}
+
+export const deleteConversation = async (req: Request, res: Response) => {
+  try {
+    const currentUserId = (req as any).user?.userId || (req as any).user?.id
+    const id = String(req.params.id)
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
+    }
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'ID de conversación requerido.' })
+    }
+
+    const conversation = await prisma.conversation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        user1Id: true,
+        user2Id: true,
+      },
+    })
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: 'Conversación no encontrada.' })
+    }
+
+    if (conversation.user1Id !== currentUserId && conversation.user2Id !== currentUserId) {
+      return res.status(403).json({ success: false, message: 'No tienes autorización para eliminar esta conversación.' })
+    }
+
+    const otherUserId = conversation.user1Id === currentUserId ? conversation.user2Id : conversation.user1Id
+    const [u1, u2] = [conversation.user1Id, conversation.user2Id].sort()
+
+    // 1. Eliminar todos los mensajes asociados a la conversación
+    await prisma.message.deleteMany({
+      where: { conversationId: id },
+    })
+
+    // 2. Eliminar la conversación
+    await prisma.conversation.delete({
+      where: { id },
+    })
+
+    // 3. Eliminar el Match registrado entre ambos usuarios
+    await prisma.match.deleteMany({
+      where: {
+        user1Id: u1,
+        user2Id: u2,
+      },
+    })
+
+    // 4. Eliminar las interacciones mutuas para que no queden vinculados como like
+    await prisma.interaction.deleteMany({
+      where: {
+        OR: [
+          { senderId: currentUserId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: currentUserId },
+        ],
+      },
+    })
+
+    // 5. Eliminar notificaciones de match previas entre ambos
+    await prisma.notification.deleteMany({
+      where: {
+        OR: [
+          { userId: currentUserId, type: 'match' },
+          { userId: otherUserId, type: 'match' },
+          { userId: currentUserId, type: 'match_request' },
+          { userId: otherUserId, type: 'match_request' },
+        ],
+      },
+    }).catch(() => {})
+
+    return res.status(200).json({
+      success: true,
+      message: 'Desconexión completada. Match y conversación eliminados exitosamente.',
+    })
+  } catch (error: any) {
+    console.error('Error al desconectar y eliminar conversación/match:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error en el servidor al desconectar el usuario.',
       error: error.message,
     })
   }

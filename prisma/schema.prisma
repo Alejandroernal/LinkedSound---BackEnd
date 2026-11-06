@@ -101,6 +101,7 @@ model User {
   activityLogs         UserActivityLog[]
   notifications        Notification[]
   userImages           UserImage[]
+  eventComments        EventComment[]
 
   @@map("User")
 }
@@ -118,17 +119,19 @@ model UserRole {
 }
 
 model Location {
-  id               String    @id @default(uuid()) @db.Uuid
-  name             String?   @db.VarChar(150)
-  formattedAddress String    @db.VarChar(255)
-  country          String?   @db.VarChar(100)
-  province         String?   @db.VarChar(100)
-  city             String?   @db.VarChar(100)
-  streetAddress    String?   @db.VarChar(150)
+  id               String         @id @default(uuid()) @db.Uuid
+  name             String?        @db.VarChar(150)
+  formattedAddress String         @db.VarChar(255)
+  country          String?        @db.VarChar(100)
+  province         String?        @db.VarChar(100)
+  city             String?        @db.VarChar(100)
+  streetAddress    String?        @db.VarChar(150)
   latitude         Float?
   longitude        Float?
-  createdAt        DateTime  @default(now()) @db.Timestamptz
-  updatedAt        DateTime  @default(now()) @updatedAt @db.Timestamptz
+  srid             Int?           @default(4326)
+  spatialRefSys    SpatialRefSys? @relation(fields: [srid], references: [srid], onDelete: Restrict)
+  createdAt        DateTime       @default(now()) @db.Timestamptz
+  updatedAt        DateTime       @default(now()) @updatedAt @db.Timestamptz
 
   users            User[]
   events           Event[]
@@ -186,8 +189,12 @@ model Track {
   soundcloudLink String?      @db.VarChar(500)
   format         String?      @db.VarChar(20)
   snippetType    String?      @db.VarChar(60)
+  snippetTypeId  String?      @db.Uuid
+  snippetTypeRef SnippetType? @relation(fields: [snippetTypeId], references: [id], onDelete: SetNull)
   bpm            String?      @db.VarChar(30)
   key            String?      @db.VarChar(30)
+  musicalKeyId   String?      @db.Uuid
+  musicalKeyRef  MusicalKey?  @relation(fields: [musicalKeyId], references: [id], onDelete: SetNull)
   fileSize       String?      @db.VarChar(50)
   order          Int?         @default(0)
   userId         String?      @db.Uuid
@@ -244,6 +251,7 @@ model Event {
   tracks         Track[]
   reports        Report[]     @relation("EventReports")
   eventImages    EventImage[]
+  comments       EventComment[]
 
   @@map("Event")
 }
@@ -402,4 +410,56 @@ model Notification {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("Notification")
+}
+
+model EventComment {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  userId    String   @db.Uuid
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([userId])
+  @@map("EventComment")
+}
+
+model SnippetType {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  description String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  tracks      Track[]
+
+  @@map("SnippetType")
+}
+
+model MusicalKey {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(50)
+  description String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  tracks      Track[]
+
+  @@map("MusicalKey")
+}
+
+model SpatialRefSys {
+  srid      Int        @id
+  authName  String?    @map("auth_name") @db.VarChar(256)
+  authSrid  Int?       @map("auth_srid")
+  srtext    String?    @db.VarChar(2048)
+  proj4text String?    @db.VarChar(2048)
+
+  locations Location[]
+
+  @@map("spatial_ref_sys")
 }

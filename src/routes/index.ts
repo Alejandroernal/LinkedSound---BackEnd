@@ -8,6 +8,7 @@ import { activityRouter } from './activity.routes.js'
 import { conversationRouter } from './conversation.routes.js'
 import { interactionRouter } from './interaction.routes.js'
 import { notificationRouter } from './notification.routes.js'
+import { trackRouter } from './track.routes.js'
 
 export const apiRouter = Router()
 
@@ -15,6 +16,7 @@ apiRouter.use('/health', healthRouter)
 apiRouter.use('/auth', authRouter)
 apiRouter.use('/upload', uploadRouter)
 apiRouter.use('/events', eventRouter)
+apiRouter.use('/tracks', trackRouter)
 apiRouter.use('/reports', reportRouter)
 apiRouter.use('/activity', activityRouter)
 apiRouter.use('/conversations', conversationRouter)
