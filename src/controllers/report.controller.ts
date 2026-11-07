@@ -1,82 +1,12 @@
 import type { Request, Response } from 'express'
-import { prisma } from '../config/prisma.js'
-
-const getReportModel = () => {
-  return (prisma as any).report || (prisma as any).userReport
-}
+import { reportService } from '../services/report.service.js'
 
 export const getReports = async (_req: Request, res: Response) => {
   try {
-    const reportModel = getReportModel()
-    const reports = await reportModel.findMany({
-      include: {
-        reporter: {
-          select: {
-            id: true,
-            nickname: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        reportedUser: {
-          select: {
-            id: true,
-            nickname: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        reportedEvent: {
-          select: {
-            id: true,
-            title: true,
-            nickname: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    })
-
-    const formatted = reports.map((r: any) => {
-      const reporterName = r.reporter
-        ? r.reporter.nickname || `${r.reporter.firstName} ${r.reporter.lastName}`.trim()
-        : 'Usuario Anonimo'
-
-      let reportedTargetName = 'Desconocido'
-      if (r.targetType === 'Evento' && r.reportedEvent) {
-        reportedTargetName = r.reportedEvent.title || r.reportedEvent.nickname
-      } else if (r.reportedUser) {
-        reportedTargetName = r.reportedUser.nickname || `${r.reportedUser.firstName} ${r.reportedUser.lastName}`.trim()
-      }
-
-      const createdDate = new Date(r.createdAt)
-      const day = String(createdDate.getDate()).padStart(2, '0')
-      const month = String(createdDate.getMonth() + 1).padStart(2, '0')
-      const year = createdDate.getFullYear()
-      const formattedDate = `${year}-${month}-${day}`
-
-      return {
-        id: r.id,
-        reporterUser: reporterName,
-        reportedUser: reportedTargetName,
-        reportedUserId: r.reportedUserId,
-        reportedEventId: r.reportedEventId,
-        reason: r.reason,
-        details: r.details,
-        date: formattedDate,
-        status: r.status as 'Pending' | 'Resolved' | 'Dismissed',
-        severity: r.severity as 'Low' | 'Medium' | 'High',
-        origin: r.origin as 'Discovery' | 'Explorer',
-        targetType: r.targetType as 'Perfil' | 'Evento',
-        adminComment: r.adminComment || undefined,
-      }
-    })
-
+    const reports = await reportService.getAllReports()
     return res.status(200).json({
       success: true,
-      reports: formatted,
+      reports,
     })
   } catch (error: any) {
     console.error('Error al obtener reportes:', error)
@@ -99,71 +29,16 @@ export const createReport = async (req: Request, res: Response) => {
       origin = 'Discovery',
     } = req.body
 
-    if (!reason || !details) {
-      return res.status(400).json({
-        success: false,
-        message: 'Motivo y detalles son obligatorios para enviar el reporte.',
-      })
-    }
+    const reporterUserId = (req as any).user?.userId || (req as any).user?.id || req.body.reporterUserId
 
-    let reporterUserId = (req as any).user?.userId || (req as any).user?.id || req.body.reporterUserId
-
-    if (!reporterUserId) {
-      const activeUser = await prisma.user.findFirst({
-        where: { status: 'Active' },
-      })
-      if (activeUser) {
-        reporterUserId = activeUser.id
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'No hay usuarios registrados para asociar el reporte.',
-        })
-      }
-    }
-
-    let reportedUserId: string | null = null
-    let reportedEventId: string | null = null
-
-    if (targetType === 'Evento') {
-      const foundEvent = await prisma.event.findFirst({
-        where: {
-          OR: [
-            { title: { equals: targetName, mode: 'insensitive' } },
-            { nickname: { equals: targetName, mode: 'insensitive' } },
-          ],
-        },
-      })
-      if (foundEvent) {
-        reportedEventId = foundEvent.id
-      }
-    } else {
-      const foundUser = await prisma.user.findFirst({
-        where: {
-          OR: [
-            { nickname: { equals: targetName, mode: 'insensitive' } },
-            { firstName: { equals: targetName, mode: 'insensitive' } },
-          ],
-        },
-      })
-      if (foundUser) {
-        reportedUserId = foundUser.id
-      }
-    }
-
-    const reportModel = getReportModel()
-    const createdReport = await reportModel.create({
-      data: {
-        reporterUserId,
-        reportedUserId,
-        reportedEventId,
-        reason: reason.trim(),
-        details: details.trim(),
-        severity,
-        origin,
-        targetType: targetType === 'Evento' ? 'Evento' : 'Perfil',
-        status: 'Pending',
-      },
+    const createdReport = await reportService.createReport({
+      reporterUserId,
+      targetName,
+      targetType,
+      reason,
+      details,
+      severity,
+      origin,
     })
 
     return res.status(201).json({
@@ -173,9 +48,12 @@ export const createReport = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     console.error('Error al crear reporte:', error)
-    return res.status(500).json({
+    const isValidationError = error.message.includes('obligatorios') ||
+      error.message.includes('vincularse') ||
+      error.message.includes('disponibles')
+    return res.status(isValidationError ? 400 : 500).json({
       success: false,
-      message: 'Error al registrar el reporte en la base de datos.',
+      message: error.message || 'Error al registrar el reporte en la base de datos.',
       error: error.message,
     })
   }
@@ -186,33 +64,11 @@ export const updateReport = async (req: Request, res: Response) => {
     const id = String(req.params.id)
     const { status, adminComment, severity } = req.body
 
-    const reportModel = getReportModel()
-    const existing = await reportModel.findUnique({
-      where: { id },
-    })
-
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        message: 'Reporte no encontrado.',
-      })
-    }
-
-    // Regla de negocio: El comentario del administrador es obligatorio al resolver o desestimar
-    if ((status === 'Resolved' || status === 'Dismissed') && (!adminComment || !String(adminComment).trim())) {
-      return res.status(400).json({
-        success: false,
-        message: 'El comentario de resolución o justificación del Administrador es obligatorio.',
-      })
-    }
-
-    const updated = await reportModel.update({
-      where: { id },
-      data: {
-        ...(status ? { status } : {}),
-        ...(adminComment !== undefined ? { adminComment: adminComment ? String(adminComment).trim() : null } : {}),
-        ...(severity ? { severity } : {}),
-      },
+    const updated = await reportService.updateReport({
+      id,
+      status,
+      adminComment,
+      severity,
     })
 
     return res.status(200).json({
@@ -222,9 +78,12 @@ export const updateReport = async (req: Request, res: Response) => {
     })
   } catch (error: any) {
     console.error('Error al actualizar reporte:', error)
-    return res.status(500).json({
+    const isNotFound = error.message.includes('no encontrado')
+    const isValidation = error.message.includes('obligatorio')
+    const statusCode = isNotFound ? 404 : isValidation ? 400 : 500
+    return res.status(statusCode).json({
       success: false,
-      message: 'Error al actualizar el reporte.',
+      message: error.message || 'Error al actualizar el reporte.',
       error: error.message,
     })
   }

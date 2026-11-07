@@ -1,4 +1,4 @@
-import { prisma } from './config/prisma.js'
+import { query, pool } from './config/db.js'
 import { hashPassword } from './utils/password.js'
 
 const GENRES = [
@@ -62,116 +62,113 @@ const REPORT_STATUSES = [
 ]
 
 async function seed() {
-  console.log('Iniciando sincronizacion basica de base de datos en Supabase...')
+  console.log('Iniciando sincronizacion basica de base de datos nativa en PostgreSQL...')
 
-  // 1. Sincronizar roles
-  for (const role of ROLES) {
-    await prisma.role.upsert({
-      where: { name: role.name },
-      update: { description: role.description },
-      create: role,
-    })
+  // 1. Roles
+  for (const r of ROLES) {
+    await query(`
+      INSERT INTO "Role" (id, name, description, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
+    `, [r.name, r.description])
   }
   console.log('Catalogo de Roles sincronizado.')
 
-  // 2. Sincronizar estados de usuario
+  // 2. Estados de usuario
   for (const st of USER_STATUSES) {
-    await prisma.userStatus.upsert({
-      where: { name: st.name },
-      update: { description: st.description },
-      create: st,
-    })
+    await query(`
+      INSERT INTO "UserStatus" (id, name, description, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
+    `, [st.name, st.description])
   }
 
-  // 3. Sincronizar estados de eventos
+  // 3. Estados de eventos
   for (const st of EVENT_STATUSES) {
-    await prisma.eventStatus.upsert({
-      where: { name: st.name },
-      update: { description: st.description },
-      create: st,
-    })
+    await query(`
+      INSERT INTO "EventStatus" (id, name, description, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
+    `, [st.name, st.description])
   }
 
-  // 4. Sincronizar tipos de evento
+  // 4. Tipos de evento
   for (const et of EVENT_TYPES) {
-    await prisma.eventType.upsert({
-      where: { name: et.name },
-      update: { description: et.description },
-      create: et,
-    })
+    await query(`
+      INSERT INTO "EventType" (id, name, description, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
+    `, [et.name, et.description])
   }
 
-  // 5. Sincronizar estados de reportes
+  // 5. Estados de reportes
   for (const st of REPORT_STATUSES) {
-    await prisma.reportStatus.upsert({
-      where: { name: st.name },
-      update: { description: st.description },
-      create: st,
-    })
+    await query(`
+      INSERT INTO "ReportStatus" (id, name, description, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
+    `, [st.name, st.description])
   }
   console.log('Catalogos de Estados y Tipos sincronizados.')
 
-  // 6. Sincronizar catalogo de generos con slug
+  // 6. Generos musicales con slugs
   for (const genre of GENRES) {
-    await prisma.genre.upsert({
-      where: { name: genre.name },
-      update: { slug: genre.slug },
-      create: genre,
-    })
+    await query(`
+      INSERT INTO "Genre" (id, name, slug, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (name) DO UPDATE SET slug = EXCLUDED.slug;
+    `, [genre.name, genre.slug])
   }
   console.log(`Catalogo de ${GENRES.length} generos sincronizado con slugs.`)
 
-  // 7. Verificar usuario Administrador inicial
+  // 7. Administrador inicial
   const adminEmail = 'admin@linkedsound.app'
-  const existingAdmin = await prisma.user.findUnique({
-    where: { email: adminEmail },
-    include: { roles: true },
-  })
+  const adminRes = await query(`SELECT id FROM "User" WHERE email = $1 LIMIT 1;`, [adminEmail])
+  const roleRes = await query(`SELECT id FROM "Role" WHERE name = 'Administrador' LIMIT 1;`)
+  const statusRes = await query(`SELECT id FROM "UserStatus" WHERE name = 'Active' LIMIT 1;`)
 
-  const adminRole = await prisma.role.findUnique({ where: { name: 'Administrador' } })
-  const activeStatus = await prisma.userStatus.findUnique({ where: { name: 'Active' } })
+  const adminRoleId = roleRes.rows[0]?.id
+  const activeStatusId = statusRes.rows[0]?.id
 
-  if (!existingAdmin) {
+  if (adminRes.rows.length === 0) {
     const hashedPassword = await hashPassword('adminpassword123')
-    const adminUser = await prisma.user.create({
-      data: {
-        email: adminEmail,
-        password: hashedPassword,
-        firstName: 'Admin',
-        lastName: 'LinkedSound',
-        nickname: 'Admin',
-        role: 'Administrador',
-        status: 'Active',
-        ...(activeStatus ? { userStatus: { connect: { id: activeStatus.id } } } : {}),
-        description: 'Administrador general de la plataforma LinkedSound.',
-        location: {
-          create: {
-            name: 'LinkedSound Central',
-            formattedAddress: 'LinkedSound HQ',
-          },
-        },
-      },
-    })
+    const locRes = await query(`
+      INSERT INTO "Location" (id, name, "formattedAddress", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), 'LinkedSound Central', 'LinkedSound HQ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      RETURNING id;
+    `)
+    const locId = locRes.rows[0].id
 
-    if (adminRole) {
-      await prisma.userRole.create({
-        data: {
-          userId: adminUser.id,
-          roleId: adminRole.id,
-        },
-      }).catch(() => {})
+    const newAdmin = await query(`
+      INSERT INTO "User" (
+        id, email, password, "firstName", "lastName", nickname, role, "accountRole",
+        description, "locationId", "statusId", "reportsCount", "createdAt", "updatedAt"
+      )
+      VALUES (
+        gen_random_uuid(), $1, $2, 'Admin', 'LinkedSound', 'Admin', 'Artista', 'Administrador',
+        'Administrador general de la plataforma LinkedSound.', $3, $4, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+      RETURNING id;
+    `, [adminEmail, hashedPassword, locId, activeStatusId])
+
+    if (adminRoleId) {
+      await query(`
+        INSERT INTO "UserRole" ("userId", "roleId", "assignedAt")
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT DO NOTHING;
+      `, [newAdmin.rows[0].id, adminRoleId])
     }
-    console.log('Usuario Administrador inicial verificado en Supabase.')
+    console.log('Usuario Administrador inicial verificado en PostgreSQL.')
   } else {
-    if (adminRole && existingAdmin.roles.length === 0) {
-      await prisma.userRole.create({
-        data: {
-          userId: existingAdmin.id,
-          roleId: adminRole.id,
-        },
-      }).catch(() => {})
+    const adminId = adminRes.rows[0].id
+    if (adminRoleId) {
+      await query(`
+        INSERT INTO "UserRole" ("userId", "roleId", "assignedAt")
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT DO NOTHING;
+      `, [adminId, adminRoleId])
     }
-    console.log('El usuario Administrador ya existe en Supabase.')
+    console.log('El usuario Administrador ya existe en PostgreSQL.')
   }
 
   console.log('Sincronizacion completada con exito.')
@@ -182,5 +179,5 @@ seed()
     console.error('Error durante la sincronizacion:', e)
   })
   .finally(async () => {
-    await prisma.$disconnect()
+    await pool.end()
   })

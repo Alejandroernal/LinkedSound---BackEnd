@@ -1,53 +1,18 @@
 import type { Response } from 'express'
-import { prisma } from '../config/prisma.js'
 import type { AuthenticatedRequest } from '../middlewares/auth.middleware.js'
-
-function formatRelativeTime(date: Date): string {
-  const diffMs = Date.now() - date.getTime()
-  const diffSec = Math.floor(diffMs / 1000)
-  const diffMin = Math.floor(diffSec / 60)
-  const diffHour = Math.floor(diffMin / 60)
-  const diffDay = Math.floor(diffHour / 24)
-
-  if (diffSec < 60) return 'Justo ahora'
-  if (diffMin < 60) return `Hace ${diffMin} ${diffMin === 1 ? 'minuto' : 'minutos'}`
-  if (diffHour < 24) return `Hace ${diffHour} ${diffHour === 1 ? 'hora' : 'horas'}`
-  return `Hace ${diffDay} ${diffDay === 1 ? 'dia' : 'dias'}`
-}
+import { notificationService } from '../services/notification.service.js'
 
 export const getNotifications = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.userId
-
     if (!userId) {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
     }
 
-    const notifs = await prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 40,
-    })
-
-    const formatted = notifs.map((n: any) => {
-      const isReadVal = n.isRead !== undefined ? n.isRead : Boolean(n.read)
-      return {
-        id: n.id,
-        title: n.title,
-        message: n.message,
-        read: isReadVal,
-        isRead: isReadVal,
-        readAt: n.readAt,
-        type: n.type,
-        linkPage: n.linkPage || 'Discovery',
-        timestamp: formatRelativeTime(n.createdAt),
-        createdAt: n.createdAt,
-      }
-    })
-
+    const notifications = await notificationService.getUserNotifications(userId)
     return res.status(200).json({
       success: true,
-      notifications: formatted,
+      notifications,
     })
   } catch (error: any) {
     console.error('Error al obtener notificaciones:', error)
@@ -69,18 +34,7 @@ export const markAsRead = async (req: AuthenticatedRequest, res: Response) => {
     }
 
     const notifId = Array.isArray(id) ? id[0] : id
-    const now = new Date()
-
-    await prisma.notification.updateMany({
-      where: {
-        id: notifId,
-        userId,
-      },
-      data: {
-        isRead: true,
-        readAt: now,
-      } as any,
-    })
+    await notificationService.markAsRead(userId, notifId)
 
     return res.status(200).json({
       success: true,
@@ -99,19 +53,11 @@ export const markAsRead = async (req: AuthenticatedRequest, res: Response) => {
 export const markAllAsRead = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.userId
-
     if (!userId) {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
     }
 
-    const now = new Date()
-    await prisma.notification.updateMany({
-      where: { userId },
-      data: {
-        isRead: true,
-        readAt: now,
-      } as any,
-    })
+    await notificationService.markAllAsRead(userId)
 
     return res.status(200).json({
       success: true,
@@ -130,14 +76,11 @@ export const markAllAsRead = async (req: AuthenticatedRequest, res: Response) =>
 export const clearNotifications = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.userId
-
     if (!userId) {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
     }
 
-    await prisma.notification.deleteMany({
-      where: { userId },
-    })
+    await notificationService.clearNotifications(userId)
 
     return res.status(200).json({
       success: true,

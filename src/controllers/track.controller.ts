@@ -1,12 +1,9 @@
 import type { Request, Response } from 'express'
-import { prisma } from '../config/prisma.js'
+import { trackService } from '../services/track.service.js'
 
 export const getSnippetTypes = async (_req: Request, res: Response) => {
   try {
-    const snippetTypes = await prisma.snippetType.findMany({
-      orderBy: { order: 'asc' },
-    })
-
+    const snippetTypes = await trackService.getSnippetTypes()
     return res.status(200).json({
       success: true,
       snippetTypes,
@@ -23,10 +20,7 @@ export const getSnippetTypes = async (_req: Request, res: Response) => {
 
 export const getMusicalKeys = async (_req: Request, res: Response) => {
   try {
-    const musicalKeys = await prisma.musicalKey.findMany({
-      orderBy: { order: 'asc' },
-    })
-
+    const musicalKeys = await trackService.getMusicalKeys()
     return res.status(200).json({
       success: true,
       musicalKeys,
@@ -43,15 +37,10 @@ export const getMusicalKeys = async (_req: Request, res: Response) => {
 
 export const getTrackOptions = async (_req: Request, res: Response) => {
   try {
-    const [snippetTypes, musicalKeys] = await Promise.all([
-      prisma.snippetType.findMany({ orderBy: { order: 'asc' } }),
-      prisma.musicalKey.findMany({ orderBy: { order: 'asc' } }),
-    ])
-
+    const options = await trackService.getTrackOptions()
     return res.status(200).json({
       success: true,
-      snippetTypes,
-      musicalKeys,
+      ...options,
     })
   } catch (error: any) {
     console.error('Error al obtener opciones de tracks:', error)
@@ -62,4 +51,3 @@ export const getTrackOptions = async (_req: Request, res: Response) => {
     })
   }
 }
-

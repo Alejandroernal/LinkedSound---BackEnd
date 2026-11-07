@@ -47,13 +47,17 @@ export const uploadBase64ToCloudinary = async (
 
   try {
     const isAudio = base64String.startsWith('data:audio')
-    const result = await cloudinary.uploader.upload(base64String, {
+    const uploadPromise = cloudinary.uploader.upload(base64String, {
       folder,
       resource_type: isAudio ? 'video' : 'auto',
     })
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Cloudinary upload timed out')), 6000)
+    )
+    const result = await Promise.race([uploadPromise, timeoutPromise])
     return result.secure_url
   } catch (err) {
-    console.warn('Cloudinary upload skipped o no configurado, guardando imagen local/data-url:', err)
+    console.warn('Cloudinary upload omitido o tardo demasiado, guardando imagen local/data-url:', err)
     return base64String
   }
 }
