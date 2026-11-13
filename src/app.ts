@@ -2,7 +2,7 @@ import express, { Application, Request, Response } from 'express'
 import cors from 'cors'
 import { config } from './config/environment.js'
 import { apiRouter } from './routes/index.js'
-import { errorHandler } from './middlewares/errorHandler.js'
+import { errorMiddleware } from './middlewares/error.middleware.js'
 
 export const createApp = (): Application => {
   const app = express()
@@ -30,7 +30,7 @@ export const createApp = (): Application => {
   })
 
   // Middleware de gestion de errores
-  app.use(errorHandler)
+  app.use(errorMiddleware)
 
   return app
 }

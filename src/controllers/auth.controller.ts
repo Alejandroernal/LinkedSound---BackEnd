@@ -1,6 +1,11 @@
 import type { Request, Response } from 'express'
 import type { AuthenticatedRequest } from '../middlewares/auth.middleware.js'
 import { authService, formatUserResponse } from '../services/auth.service.js'
+import {
+  updateProfile as updateProfilePerfiles,
+  getGenres as getGenresPerfiles,
+  getUsers as getUsersPerfiles,
+} from './perfiles.controller.js'
 
 export { formatUserResponse }
 
@@ -53,84 +58,20 @@ export const getMe = async (req: AuthenticatedRequest, res: Response) => {
       })
     }
 
-    const user = await authService.getMe(userId)
+    const user = await authService.getUserById(userId)
     return res.status(200).json({
       success: true,
       user,
     })
   } catch (error: any) {
-    console.error('Error al obtener perfil:', error)
-    const statusCode = error.statusCode || 500
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || 'Error al obtener el perfil del usuario',
-      error: error.message,
-    })
-  }
-}
-
-export const updateProfile = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const userId = req.user?.userId
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: 'Usuario no autenticado',
-      })
-    }
-
-    const updatedUser = await authService.updateProfile(userId, req.body)
-    return res.status(200).json({
-      success: true,
-      message: 'Perfil actualizado exitosamente',
-      user: updatedUser,
-    })
-  } catch (error: any) {
-    console.error('Error al actualizar perfil:', error)
-    const isValidation = error.message.includes('maximo') || error.message.includes('valida')
-    const statusCode = error.statusCode || (isValidation ? 400 : 500)
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || 'Error al actualizar el perfil',
-      error: error.message,
-    })
-  }
-}
-
-export const getGenres = async (_req: Request, res: Response) => {
-  try {
-    const genres = await authService.getGenres()
-    return res.status(200).json({
-      success: true,
-      genres,
-    })
-  } catch (error: any) {
-    console.error('Error al obtener generos:', error)
+    console.error('Error al obtener usuario autenticado:', error)
     return res.status(500).json({
       success: false,
-      message: 'Error al obtener los generos',
-      error: error.message,
+      message: error.message || 'Error al obtener datos del usuario',
     })
   }
 }
 
-export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const currentUserId = req.user?.userId
-    const currentUserRole = req.user?.accountRole || req.user?.role
-    const includeSelf = req.query.all === 'true'
-
-    const users = await authService.getUsers(currentUserId, currentUserRole, includeSelf)
-    return res.status(200).json({
-      success: true,
-      users,
-    })
-  } catch (error: any) {
-    console.error('Error al obtener usuarios:', error)
-    return res.status(500).json({
-      success: false,
-      message: 'Error al consultar usuarios en la base de datos.',
-      error: error.message,
-    })
-  }
-}
+export const updateProfile = updateProfilePerfiles
+export const getGenres = getGenresPerfiles
+export const getUsers = getUsersPerfiles

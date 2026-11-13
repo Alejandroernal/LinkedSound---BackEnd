@@ -133,19 +133,19 @@ async function seed() {
   if (adminRes.rows.length === 0) {
     const hashedPassword = await hashPassword('adminpassword123')
     const locRes = await query(`
-      INSERT INTO "Location" (id, name, "formattedAddress", "createdAt", "updatedAt")
-      VALUES (gen_random_uuid(), 'LinkedSound Central', 'LinkedSound HQ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO "Location" (id, "formattedAddress", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), 'LinkedSound HQ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       RETURNING id;
     `)
     const locId = locRes.rows[0].id
 
     const newAdmin = await query(`
       INSERT INTO "User" (
-        id, email, password, "firstName", "lastName", nickname, role, "accountRole",
+        id, email, password, "firstName", "lastName", nickname, "accountRole",
         description, "locationId", "statusId", "reportsCount", "createdAt", "updatedAt"
       )
       VALUES (
-        gen_random_uuid(), $1, $2, 'Admin', 'LinkedSound', 'Admin', 'Artista', 'Administrador',
+        gen_random_uuid(), $1, $2, 'Admin', 'LinkedSound', 'Admin', 'Administrador',
         'Administrador general de la plataforma LinkedSound.', $3, $4, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING id;

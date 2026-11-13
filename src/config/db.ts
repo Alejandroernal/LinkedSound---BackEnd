@@ -8,7 +8,11 @@ const globalForDb = globalThis as unknown as {
 }
 
 const connectionString = process.env.DATABASE_URL || ''
-const requiresSsl = connectionString.includes('sslmode=require') || connectionString.includes(':6543')
+const requiresSsl =
+  connectionString.includes('sslmode=require') ||
+  connectionString.includes(':6543') ||
+  connectionString.includes('supabase.com') ||
+  connectionString.includes('supabase.co')
 
 export const pool =
   globalForDb.dbPool ??

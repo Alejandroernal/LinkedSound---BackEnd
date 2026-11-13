@@ -1,7 +1,8 @@
 -- ==============================================================================
 -- LinkedSound - Script DDL Completo y Actualizado para Supabase (PostgreSQL)
--- Modelo Relacional Normalizado con UUIDs nativos, PostGIS, VARCHAR(n),
--- TIMESTAMPTZ, Catalogos de Estado y Tipos, Restricciones Canonicas y Roles N:M.
+-- Modelo Relacional Normalizado con VARCHAR(N), UUIDs nativos, PostGIS geography,
+-- TIMESTAMPTZ, Catalogos de Estado y Tipos, Entidades Normalizadas de Imagen,
+-- y Restricciones Canonicas CHECK / UNIQUE sin redundancias.
 -- ==============================================================================
 
 -- 1. Extensiones requeridas
@@ -9,8 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- ==============================================================================
--- 2. Limpieza de Esquema Previo (Permite re-ejecucion limpia sin conflictos
---    con tablas antiguas que tenian IDs de tipo TEXT o carecian de columnas nuevas)
+-- 2. Limpieza de Esquema Previo
 -- ==============================================================================
 DO $$
 BEGIN
@@ -30,6 +30,10 @@ DROP TABLE IF EXISTS "Match" CASCADE;
 DROP TABLE IF EXISTS "Interaction" CASCADE;
 DROP TABLE IF EXISTS "TrackGenre" CASCADE;
 DROP TABLE IF EXISTS "Track" CASCADE;
+DROP TABLE IF EXISTS "MusicalKey" CASCADE;
+DROP TABLE IF EXISTS "SnippetType" CASCADE;
+DROP TABLE IF EXISTS "EventImage" CASCADE;
+DROP TABLE IF EXISTS "Image" CASCADE;
 DROP TABLE IF EXISTS "EventGenre" CASCADE;
 DROP TABLE IF EXISTS "Event" CASCADE;
 DROP TABLE IF EXISTS "ProfileGenre" CASCADE;
@@ -79,7 +83,7 @@ CREATE TABLE "EventType" (
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Catalogo de Estados de Reporte (Pending, Resolved, Dismissed, Under Review)
+-- Catalogo de Estados de Reporte (Pending, Under Review, Resolved, Dismissed)
 CREATE TABLE "ReportStatus" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" VARCHAR(50) UNIQUE NOT NULL,
@@ -89,45 +93,24 @@ CREATE TABLE "ReportStatus" (
 
 -- ==============================================================================
 -- 4. Entidad de Ubicaciones y Georreferenciacion con PostGIS
+-- Eliminadas redundancias (name, latitude, longitude); unificado en geo_point.
 -- ==============================================================================
 CREATE TABLE "Location" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" VARCHAR(150),
     "formattedAddress" VARCHAR(255) NOT NULL,
     "country" VARCHAR(100),
     "province" VARCHAR(100),
     "city" VARCHAR(100),
     "streetAddress" VARCHAR(150),
-    "latitude" DOUBLE PRECISION,
-    "longitude" DOUBLE PRECISION,
     "geo_point" GEOGRAPHY(Point, 4326),
+    "srid" INTEGER DEFAULT 4326,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE OR REPLACE FUNCTION update_location_geo_point()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW."latitude" IS NOT NULL AND NEW."longitude" IS NOT NULL THEN
-        NEW."geo_point" := ST_SetSRID(ST_MakePoint(NEW."longitude", NEW."latitude"), 4326)::geography;
-    ELSE
-        NEW."geo_point" := NULL;
-    END IF;
-    IF NEW."name" IS NULL OR length(trim(NEW."name")) = 0 THEN
-        NEW."name" := LEFT(NEW."formattedAddress", 150);
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS "trg_update_location_geo_point" ON "Location";
-CREATE TRIGGER "trg_update_location_geo_point"
-BEFORE INSERT OR UPDATE OF "latitude", "longitude", "name", "formattedAddress" ON "Location"
-FOR EACH ROW
-EXECUTE FUNCTION update_location_geo_point();
-
 -- ==============================================================================
 -- 5. Entidad de Usuarios y Perfiles
+-- Normalizada: rol gestionado en UserRole; status gestionado exclusivamente por statusId.
 -- ==============================================================================
 CREATE TABLE "User" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -137,50 +120,21 @@ CREATE TABLE "User" (
     "lastName" VARCHAR(100) NOT NULL,
     "nickname" VARCHAR(50) UNIQUE NOT NULL,
     "profileImage" TEXT,
-    "role" VARCHAR(50) DEFAULT 'Artista',
     "description" TEXT,
     "soundcloudUrl" VARCHAR(255),
     "spotifyUrl" VARCHAR(255),
-    "instagramUrl" VARCHAR(255),
     "soundcloudHandle" VARCHAR(100),
     "locationId" UUID,
-    "statusId" UUID,
-    "status" VARCHAR(50) NOT NULL DEFAULT 'Active',
+    "statusId" UUID NOT NULL,
     "reportsCount" INTEGER NOT NULL DEFAULT 0,
+    "accountRole" VARCHAR(50) NOT NULL DEFAULT 'Usuario',
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "User_locationId_fkey" FOREIGN KEY ("locationId") REFERENCES "Location"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "User_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "UserStatus"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "User_status_fkey" FOREIGN KEY ("status") REFERENCES "UserStatus"("name") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "User_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "UserStatus"("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
-CREATE OR REPLACE FUNCTION sync_user_status()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        IF NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "UserStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "UserStatus" WHERE "name" = NEW."status";
-        END IF;
-    ELSIF TG_OP = 'UPDATE' THEN
-        IF NEW."statusId" IS DISTINCT FROM OLD."statusId" AND NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "UserStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS DISTINCT FROM OLD."status" AND NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "UserStatus" WHERE "name" = NEW."status";
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS "trg_sync_user_status" ON "User";
-CREATE TRIGGER "trg_sync_user_status"
-BEFORE INSERT OR UPDATE OF "status", "statusId" ON "User"
-FOR EACH ROW
-EXECUTE FUNCTION sync_user_status();
-
--- Tabla asociativa N:M Usuario <-> Roles (Permite ser Productor, Artista o Ambos)
+-- Tabla asociativa N:M Usuario <-> Roles
 CREATE TABLE "UserRole" (
     "userId" UUID NOT NULL,
     "roleId" UUID NOT NULL,
@@ -228,7 +182,8 @@ CREATE TABLE "ProfileGenre" (
 );
 
 -- ==============================================================================
--- 7. Eventos Musicales
+-- 7. Eventos Musicales e Imagenes Normalizadas
+-- Normalizado: eliminada columna images (array); status gestionado por statusId.
 -- ==============================================================================
 CREATE TABLE "Event" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -242,47 +197,40 @@ CREATE TABLE "Event" (
     "description" TEXT,
     "profileImage" TEXT,
     "locationId" UUID,
-    "statusId" UUID,
-    "status" VARCHAR(50) NOT NULL DEFAULT 'Active',
+    "statusId" UUID NOT NULL,
     "reportsCount" INTEGER NOT NULL DEFAULT 0,
     "soundcloudUrl" VARCHAR(255),
     "spotifyUrl" VARCHAR(255),
-    "instagramUrl" VARCHAR(255),
     "ownerId" UUID NOT NULL,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Event_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "Event_locationId_fkey" FOREIGN KEY ("locationId") REFERENCES "Location"("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Event_eventTypeId_fkey" FOREIGN KEY ("eventTypeId") REFERENCES "EventType"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Event_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "EventStatus"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "Event_status_fkey" FOREIGN KEY ("status") REFERENCES "EventStatus"("name") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "Event_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "EventStatus"("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
-CREATE OR REPLACE FUNCTION sync_event_status()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        IF NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "EventStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "EventStatus" WHERE "name" = NEW."status";
-        END IF;
-    ELSIF TG_OP = 'UPDATE' THEN
-        IF NEW."statusId" IS DISTINCT FROM OLD."statusId" AND NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "EventStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS DISTINCT FROM OLD."status" AND NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "EventStatus" WHERE "name" = NEW."status";
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- Entidad normalizada de Imagenes
+CREATE TABLE "Image" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "url" VARCHAR(500) NOT NULL,
+    "caption" VARCHAR(255),
+    "fileSize" VARCHAR(50),
+    "mimeType" VARCHAR(50),
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-DROP TRIGGER IF EXISTS "trg_sync_event_status" ON "Event";
-CREATE TRIGGER "trg_sync_event_status"
-BEFORE INSERT OR UPDATE OF "status", "statusId" ON "Event"
-FOR EACH ROW
-EXECUTE FUNCTION sync_event_status();
+-- Tabla intermedia N:M Event <-> Image con indicador de portada (isCover)
+CREATE TABLE "EventImage" (
+    "eventId" UUID NOT NULL,
+    "imageId" UUID NOT NULL,
+    "isCover" BOOLEAN NOT NULL DEFAULT false,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "EventImage_pkey" PRIMARY KEY ("eventId", "imageId"),
+    CONSTRAINT "EventImage_eventId_fkey" FOREIGN KEY ("eventId") REFERENCES "Event"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "EventImage_imageId_fkey" FOREIGN KEY ("imageId") REFERENCES "Image"("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
 
 -- Tabla intermedia N:M Event <-> Genre
 CREATE TABLE "EventGenre" (
@@ -295,25 +243,50 @@ CREATE TABLE "EventGenre" (
 );
 
 -- ==============================================================================
--- 8. Pistas de Audio (Tracks) y Relacion con Generos
+-- 8. Pistas de Audio (Tracks), SnippetTypes, MusicalKeys y Generos N:M
+-- Normalizado: eliminada columna genreId de Track en favor de TrackGenre.
 -- ==============================================================================
+CREATE TABLE "SnippetType" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" VARCHAR(50) UNIQUE NOT NULL,
+    "description" TEXT,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE "MusicalKey" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" VARCHAR(50) UNIQUE NOT NULL,
+    "description" TEXT,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE "Track" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" VARCHAR(150) NOT NULL,
     "plays" INTEGER NOT NULL DEFAULT 0,
     "duration" VARCHAR(10) NOT NULL DEFAULT '0:00',
-    "genreId" UUID,
     "audioUrl" VARCHAR(500),
     "soundcloudLink" VARCHAR(500),
     "userId" UUID,
     "eventId" UUID,
+    "format" VARCHAR(50),
+    "snippetType" VARCHAR(50),
+    "bpm" VARCHAR(50),
+    "key" VARCHAR(50),
+    "fileSize" VARCHAR(50),
+    "order" INTEGER DEFAULT 0,
+    "snippetTypeId" UUID,
+    "musicalKeyId" UUID,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Track_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "Track_eventId_fkey" FOREIGN KEY ("eventId") REFERENCES "Event"("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "Track_genreId_fkey" FOREIGN KEY ("genreId") REFERENCES "Genre"("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "Track_snippetTypeId_fkey" FOREIGN KEY ("snippetTypeId") REFERENCES "SnippetType"("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Track_musicalKeyId_fkey" FOREIGN KEY ("musicalKeyId") REFERENCES "MusicalKey"("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
--- Tabla intermedia N:M Track <-> Genre para soporte multi-genero
+-- Tabla intermedia N:M Track <-> Genre
 CREATE TABLE "TrackGenre" (
     "trackId" UUID NOT NULL,
     "genreId" UUID NOT NULL,
@@ -324,7 +297,7 @@ CREATE TABLE "TrackGenre" (
 );
 
 -- ==============================================================================
--- 9. Interacciones (Likes y Pases con Restriccion Anti-duplicados)
+-- 9. Interacciones (Likes y Pases con Restricciones Canonicas)
 -- ==============================================================================
 CREATE TABLE "Interaction" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -373,7 +346,7 @@ CREATE TABLE "Conversation" (
 );
 
 -- ==============================================================================
--- 12. Mensajes (Texto opcional cuando se envian adjuntos)
+-- 12. Mensajes (Texto opcional con adjuntos; readAt registrado)
 -- ==============================================================================
 CREATE TABLE "Message" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -382,7 +355,7 @@ CREATE TABLE "Message" (
     "text" TEXT,
     "isRead" BOOLEAN NOT NULL DEFAULT false,
     "readAt" TIMESTAMPTZ,
-    "attachmentUrl" VARCHAR(500),
+    "attachmentUrl" TEXT,
     "attachmentType" VARCHAR(50),
     "attachmentName" VARCHAR(255),
     "attachmentSize" VARCHAR(50),
@@ -393,7 +366,8 @@ CREATE TABLE "Message" (
 );
 
 -- ==============================================================================
--- 13. Reportes y Moderacion (Report - Usuarios o Eventos)
+-- 13. Reportes y Moderacion
+-- Normalizado: eliminados targetType y status redundant; CHECK de exclusion mutua.
 -- ==============================================================================
 CREATE TABLE "Report" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -402,81 +376,26 @@ CREATE TABLE "Report" (
     "reportedEventId" UUID,
     "reason" VARCHAR(100) NOT NULL,
     "details" TEXT NOT NULL,
-    "statusId" UUID,
-    "status" VARCHAR(50) NOT NULL DEFAULT 'Pending',
+    "statusId" UUID NOT NULL,
     "severity" VARCHAR(20) NOT NULL DEFAULT 'Medium',
     "origin" VARCHAR(50) NOT NULL DEFAULT 'Discovery',
-    "targetType" VARCHAR(20) NOT NULL DEFAULT 'Perfil',
     "adminComment" TEXT,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Report_reporterUserId_fkey" FOREIGN KEY ("reporterUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "Report_reportedUserId_fkey" FOREIGN KEY ("reportedUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Report_reportedEventId_fkey" FOREIGN KEY ("reportedEventId") REFERENCES "Event"("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Report_statusId_fkey" FOREIGN KEY ("statusId") REFERENCES "ReportStatus"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "Report_status_fkey" FOREIGN KEY ("status") REFERENCES "ReportStatus"("name") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "Report_target_mutually_exclusive_check" CHECK (
         ("reportedUserId" IS NOT NULL AND "reportedEventId" IS NULL) OR
         ("reportedUserId" IS NULL AND "reportedEventId" IS NOT NULL)
     ),
     CONSTRAINT "Report_admin_comment_required_check" CHECK (
-        "status" NOT IN ('Resolved', 'Dismissed') OR
-        ("adminComment" IS NOT NULL AND length(trim("adminComment")) > 0)
+        "adminComment" IS NULL OR length(trim("adminComment")) > 0
     )
 );
 
-CREATE OR REPLACE FUNCTION sync_report_status()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        IF NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "ReportStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "ReportStatus" WHERE "name" = NEW."status";
-        END IF;
-    ELSIF TG_OP = 'UPDATE' THEN
-        IF NEW."statusId" IS DISTINCT FROM OLD."statusId" AND NEW."statusId" IS NOT NULL THEN
-            SELECT "name" INTO NEW."status" FROM "ReportStatus" WHERE "id" = NEW."statusId";
-        ELSIF NEW."status" IS DISTINCT FROM OLD."status" AND NEW."status" IS NOT NULL THEN
-            SELECT "id" INTO NEW."statusId" FROM "ReportStatus" WHERE "name" = NEW."status";
-        END IF;
-    END IF;
-
-    IF NEW."reportedEventId" IS NOT NULL THEN
-        NEW."targetType" := 'Evento';
-    ELSE
-        NEW."targetType" := 'Perfil';
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS "trg_sync_report_status" ON "Report";
-CREATE TRIGGER "trg_sync_report_status"
-BEFORE INSERT OR UPDATE OF "status", "statusId", "reportedUserId", "reportedEventId" ON "Report"
-FOR EACH ROW
-EXECUTE FUNCTION sync_report_status();
-
--- Vista de compatibilidad retroactiva para consultas que apunten a UserReport
-CREATE OR REPLACE VIEW "UserReport" AS
-SELECT
-    "id",
-    "reporterUserId",
-    "reportedUserId",
-    "reportedEventId",
-    "reason",
-    "details",
-    "statusId",
-    "status",
-    "severity",
-    "origin",
-    "targetType",
-    "adminComment",
-    "createdAt"
-FROM "Report";
-
 -- ==============================================================================
--- 14. Auditoria y Logs de Actividad (Tipo INET para IP)
+-- 14. Auditoria y Logs de Actividad
 -- ==============================================================================
 CREATE TABLE "UserActivityLog" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -491,6 +410,7 @@ CREATE TABLE "UserActivityLog" (
 
 -- ==============================================================================
 -- 15. Notificaciones de Usuario
+-- Normalizado: readAt incluido para auditar fecha y hora de lectura.
 -- ==============================================================================
 CREATE TABLE "Notification" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -506,7 +426,7 @@ CREATE TABLE "Notification" (
 );
 
 -- ==============================================================================
--- 16. Indices de Alto Rendimiento
+-- 16. Indices de Rendimiento
 -- ==============================================================================
 CREATE INDEX "Location_geo_point_idx" ON "Location" USING GIST ("geo_point");
 CREATE INDEX "Location_city_province_idx" ON "Location"("city", "province");
@@ -526,7 +446,8 @@ CREATE INDEX "Event_date_idx" ON "Event"("eventDate");
 
 CREATE INDEX "Track_userId_idx" ON "Track"("userId");
 CREATE INDEX "Track_eventId_idx" ON "Track"("eventId");
-CREATE INDEX "Track_genreId_idx" ON "Track"("genreId");
+CREATE INDEX "Track_snippetTypeId_idx" ON "Track"("snippetTypeId");
+CREATE INDEX "Track_musicalKeyId_idx" ON "Track"("musicalKeyId");
 
 CREATE INDEX "Interaction_senderId_idx" ON "Interaction"("senderId");
 CREATE INDEX "Interaction_receiverId_idx" ON "Interaction"("receiverId");
@@ -552,7 +473,6 @@ CREATE INDEX "UserActivityLog_userId_idx" ON "UserActivityLog"("userId");
 -- ==============================================================================
 -- 17. Insercion de Catalogos Iniciales
 -- ==============================================================================
-
 INSERT INTO "Role" ("name", "description")
 VALUES
     ('Artista', 'Musicos, cantantes, interpretes y bandas musicales.'),
@@ -590,8 +510,29 @@ INSERT INTO "ReportStatus" ("name", "description")
 VALUES
     ('Pending', 'Reporte ingresado en espera de evaluacion por moderacion.'),
     ('Under Review', 'Reporte en proceso de investigacion.'),
-    ('Resolved', 'Reporte evaluado con accion correctiva y justificacion administrativa.'),
-    ('Dismissed', 'Reporte desestimado con explicacion justificada del moderador.')
+    ('Resolved', 'Reporte evaluado con accion correctiva.'),
+    ('Dismissed', 'Reporte desestimado con explicacion justificada.')
+ON CONFLICT ("name") DO NOTHING;
+
+INSERT INTO "SnippetType" ("name", "description", "order")
+VALUES
+    ('SOLO GUITARRA / LEAD', 'Solo instrumental o fraseo principal', 1),
+    ('DROP / ESTRIBILLO', 'Punto de mayor energia ritmica y armonica', 2),
+    ('INTRO / BUILD-UP', 'Introduccion o construccion sonora inicial', 3),
+    ('BEAT / DRUM PATTERN', 'Base ritmica y percusion destacada', 4),
+    ('VOCAL HOOK', 'Frase vocal o coro pegadizo', 5)
+ON CONFLICT ("name") DO NOTHING;
+
+INSERT INTO "MusicalKey" ("name", "description", "order")
+VALUES
+    ('C Major', 'Do Mayor (8B)', 1),
+    ('A Minor', 'La Menor (8A)', 2),
+    ('G Major', 'Sol Mayor (9B)', 3),
+    ('E Minor', 'Mi Menor (9A)', 4),
+    ('D Major', 'Re Mayor (10B)', 5),
+    ('B Minor', 'Si Menor (10A)', 6),
+    ('F Major', 'Fa Mayor (7B)', 7),
+    ('D Minor', 'Re Menor (7A)', 8)
 ON CONFLICT ("name") DO NOTHING;
 
 INSERT INTO "Genre" ("name", "slug", "description")
