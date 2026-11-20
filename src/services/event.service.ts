@@ -66,8 +66,12 @@ export const formatEventResponse = (ev: any) => {
 export class EventService {
   /**
    * Obtiene todos los eventos con sus imágenes, géneros, comentarios y organizador.
+   * Si el usuario no es Administrador, filtra eventos con estado 'Hidden'.
    */
-  async getAllEvents() {
+  async getAllEvents(currentUserRole?: string) {
+    const isRegularUser = currentUserRole !== 'Administrador'
+    const whereClause = isRegularUser ? "WHERE (es.name IS NULL OR es.name <> 'Hidden')" : ''
+
     const sql = `
       SELECT 
         e.id, e.title, e.nickname, e."eventTypeId" AS event_type_id, e."eventDate" AS "eventDate",
@@ -77,13 +81,16 @@ export class EventService {
         e."ownerId" AS owner_id, e."createdAt" AS "createdAt", e."updatedAt" AS "updatedAt",
         et.name AS event_type_name,
         es.name AS status_name,
-        l."formattedAddress", l.country, l.province, l.city, l."streetAddress", l.latitude, l.longitude,
+        l."formattedAddress", l.country, l.province, l.city, l."streetAddress",
+        ST_Y(l.geo_point::geometry) AS latitude,
+        ST_X(l.geo_point::geometry) AS longitude,
         u."firstName" AS owner_first, u."lastName" AS owner_last, u.nickname AS owner_nickname
       FROM "Event" e
       LEFT JOIN "EventType" et ON e."eventTypeId" = et.id
       LEFT JOIN "EventStatus" es ON e."statusId" = es.id
       LEFT JOIN "Location" l ON e."locationId" = l.id
       LEFT JOIN "User" u ON e."ownerId" = u.id
+      ${whereClause}
       ORDER BY e."createdAt" DESC;
     `
     const { rows: events } = await query(sql)
@@ -260,21 +267,27 @@ export class EventService {
     try {
       await client.query('BEGIN')
 
-      // 1. Ubicación
+      // 1. Ubicacion adaptada a geo_point en Location
       const formattedAddress = String(location || [streetAddress, city, province, country].filter(Boolean).join(', ') || 'Sin especificar').trim()
+      const latVal = latitude != null && !isNaN(parseFloat(latitude)) ? parseFloat(latitude) : null
+      const lonVal = longitude != null && !isNaN(parseFloat(longitude)) ? parseFloat(longitude) : null
+
       const locRes = await client.query(`
-        INSERT INTO "Location" (id, name, "formattedAddress", country, province, city, "streetAddress", latitude, longitude, srid, "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", geo_point, srid, "createdAt", "updatedAt")
+        VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5,
+          CASE WHEN $6::numeric IS NOT NULL AND $7::numeric IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
+          4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
         RETURNING id;
       `, [
-        venue ? String(venue).trim() : null,
         formattedAddress,
         country ? String(country).trim() : null,
         province ? String(province).trim() : null,
         city ? String(city).trim() : null,
         streetAddress ? String(streetAddress).trim() : null,
-        latitude ? parseFloat(latitude) : null,
-        longitude ? parseFloat(longitude) : null,
+        latVal,
+        lonVal,
       ])
       const locationId = locRes.rows[0].id
 
@@ -448,6 +461,16 @@ export class EventService {
         updates.push(`"spotifyUrl" = $${pIdx++}`)
         vals.push(spotifyUrl ? String(spotifyUrl).trim() : null)
       }
+      if (data.status) {
+        const sRes = await client.query(`
+          INSERT INTO "EventStatus" (id, name, "createdAt")
+          VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
+          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+          RETURNING id;
+        `, [String(data.status).trim()])
+        updates.push(`"statusId" = $${pIdx++}`)
+        vals.push(sRes.rows[0].id)
+      }
 
       await client.query(`
         UPDATE "Event"
@@ -477,7 +500,70 @@ export class EventService {
       }
 
       await client.query('COMMIT')
-      const updated = await query(`SELECT * FROM "Event" WHERE id = $1;`, [id])
+      const updated = await query(`
+        SELECT e.*, es.name AS status_name, l."formattedAddress",
+               ST_Y(l.geo_point::geometry) AS latitude, ST_X(l.geo_point::geometry) AS longitude
+        FROM "Event" e
+        LEFT JOIN "EventStatus" es ON e."statusId" = es.id
+        LEFT JOIN "Location" l ON e."locationId" = l.id
+        WHERE e.id = $1;
+      `, [id])
+      return formatEventResponse(updated.rows[0])
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Administracion: Actualiza el estado de visibilidad o moderacion de un evento.
+   */
+  async updateEventStatus(eventId: string, adminUserId: string, status: string) {
+    const trimmedStatus = String(status || '').trim()
+    if (!['Active', 'Hidden', 'Under Review', 'Finished'].includes(trimmedStatus)) {
+      throw new Error('Estado de evento invalido. Debe ser Active, Hidden, Under Review o Finished.')
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+
+      const evRes = await client.query(`SELECT id, title FROM "Event" WHERE id = $1 LIMIT 1;`, [eventId])
+      if (evRes.rows.length === 0) {
+        throw new Error('Evento no encontrado.')
+      }
+      const ev = evRes.rows[0]
+
+      const sRes = await client.query(`
+        INSERT INTO "EventStatus" (id, name, "createdAt")
+        VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id;
+      `, [trimmedStatus])
+      const statusId = sRes.rows[0].id
+
+      await client.query(`
+        UPDATE "Event"
+        SET "statusId" = $1, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE id = $2;
+      `, [statusId, eventId])
+
+      await client.query(`
+        INSERT INTO "UserActivityLog" (id, "userId", action, ip, device, module, "createdAt")
+        VALUES (gen_random_uuid(), $1, $2, '127.0.0.1', 'Admin Panel', 'Explorer', CURRENT_TIMESTAMP);
+      `, [adminUserId || 'system', `Modero estado del evento "${ev.title}" a ${trimmedStatus}`])
+
+      await client.query('COMMIT')
+      const updated = await query(`
+        SELECT e.*, es.name AS status_name, l."formattedAddress",
+               ST_Y(l.geo_point::geometry) AS latitude, ST_X(l.geo_point::geometry) AS longitude
+        FROM "Event" e
+        LEFT JOIN "EventStatus" es ON e."statusId" = es.id
+        LEFT JOIN "Location" l ON e."locationId" = l.id
+        WHERE e.id = $1;
+      `, [eventId])
       return formatEventResponse(updated.rows[0])
     } catch (err) {
       await client.query('ROLLBACK')

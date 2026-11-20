@@ -1,4 +1,4 @@
-import { query } from '../config/db.js'
+import { query, getClient } from '../config/db.js'
 
 export interface FormattedReport {
   id: string
@@ -174,34 +174,61 @@ export class ReportService {
     `)
     const statusId = statusRes.rows.length > 0 ? statusRes.rows[0].id : null
 
-    const insertSql = `
-      INSERT INTO "Report" (
-        id,
-        "reporterUserId",
-        "reportedUserId",
-        "reportedEventId",
-        reason,
-        details,
-        severity,
-        origin,
-        "statusId",
-        "createdAt"
-      )
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-      RETURNING *;
-    `
-    const insertRes = await query(insertSql, [
-      reporterUserId,
-      reportedUserId,
-      reportedEventId,
-      trimmedReason,
-      trimmedDetails,
-      input.severity || 'Medium',
-      input.origin || 'Discovery',
-      statusId,
-    ])
+    const client = await getClient()
 
-    return insertRes.rows[0]
+    try {
+      await client.query('BEGIN')
+
+      const insertSql = `
+        INSERT INTO "Report" (
+          id,
+          "reporterUserId",
+          "reportedUserId",
+          "reportedEventId",
+          reason,
+          details,
+          severity,
+          origin,
+          "statusId",
+          "createdAt"
+        )
+        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+        RETURNING *;
+      `
+      const insertRes = await client.query(insertSql, [
+        reporterUserId,
+        reportedUserId,
+        reportedEventId,
+        trimmedReason,
+        trimmedDetails,
+        input.severity || 'Medium',
+        input.origin || 'Discovery',
+        statusId,
+      ])
+
+      // Incrementar contador de denuncias reportsCount en la entidad afectada
+      if (reportedUserId) {
+        await client.query(`
+          UPDATE "User"
+          SET "reportsCount" = "reportsCount" + 1
+          WHERE id = $1;
+        `, [reportedUserId])
+      } else if (reportedEventId) {
+        await client.query(`
+          UPDATE "Event"
+          SET "reportsCount" = "reportsCount" + 1
+          WHERE id = $1;
+        `, [reportedEventId])
+      }
+
+      await client.query('COMMIT')
+      return insertRes.rows[0]
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   }
 
   /**

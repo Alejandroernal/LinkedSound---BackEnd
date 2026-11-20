@@ -22,6 +22,7 @@ apiRouter.use('/busqueda', busquedaRouter)
 apiRouter.use('/mensajes', mensajesRouter)
 
 // 2. Compatibilidad y Aliases REST
+apiRouter.use('/users', perfilesRouter)
 apiRouter.use('/interactions', matchRouter)
 apiRouter.use('/conversations', mensajesRouter)
 apiRouter.use('/search', busquedaRouter)

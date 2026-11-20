@@ -25,8 +25,11 @@ export const getConversationMessages = async (req: AuthenticatedRequest, res: Re
     }
 
     const conversationId = String(req.params.id)
-    const messages = await mensajesService.getConversationMessages(userId, conversationId)
-    return res.status(200).json({ success: true, messages })
+    const page = parseInt(req.query.page as string, 10) || 1
+    const limit = parseInt(req.query.limit as string, 10) || 50
+
+    const { messages, pagination } = await mensajesService.getConversationMessages(userId, conversationId, page, limit)
+    return res.status(200).json({ success: true, messages, pagination })
   } catch (error: any) {
     console.error('Error al obtener mensajes:', error)
     return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Error al obtener mensajes' })

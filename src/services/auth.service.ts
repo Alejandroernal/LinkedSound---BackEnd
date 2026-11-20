@@ -247,11 +247,13 @@ export class AuthService {
     const userRes = await query(`
       SELECT 
         u.id, u.email, u.password, u."accountRole",
+        s.name AS status_name,
         COALESCE(
           (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
           'Artista'
         ) AS role
       FROM "User" u
+      LEFT JOIN "UserStatus" s ON u."statusId" = s.id
       WHERE LOWER(u.email) = LOWER($1)
       LIMIT 1;
     `, [email.trim()])
@@ -263,6 +265,24 @@ export class AuthService {
     }
 
     const user = userRes.rows[0]
+
+    // Bloqueo estricto de usuarios suspendidos o dados de baja
+    if (user.status_name === 'Suspended') {
+      const err = new Error('Tu cuenta se encuentra suspendida temporalmente por un administrador.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+    if (user.status_name === 'Banned') {
+      const err = new Error('Tu cuenta ha sido bloqueada permanentemente por infringir las normas de la comunidad.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+    if (user.status_name === 'Inactive') {
+      const err = new Error('Tu cuenta se encuentra dada de baja.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+
     const isMatch = await comparePassword(pass, user.password)
     if (!isMatch) {
       const err = new Error('Credenciales invalidas (correo o contrasena incorrectos)')

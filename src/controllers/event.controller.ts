@@ -3,9 +3,10 @@ import { eventService, formatEventResponse } from '../services/event.service.js'
 
 export { formatEventResponse }
 
-export const getEvents = async (_req: Request, res: Response) => {
+export const getEvents = async (req: Request, res: Response) => {
   try {
-    const events = await eventService.getAllEvents()
+    const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
+    const events = await eventService.getAllEvents(currentUserRole)
     return res.status(200).json({
       success: true,
       events,
@@ -144,6 +145,31 @@ export const deleteEventComment = async (req: Request, res: Response) => {
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Error al eliminar el comentario.',
+      error: error.message,
+    })
+  }
+}
+
+export const updateEventStatus = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id)
+    const adminUserId = (req as any).user?.userId || ''
+    const { status } = req.body
+
+    const updated = await eventService.updateEventStatus(id, adminUserId, status)
+    return res.status(200).json({
+      success: true,
+      message: 'Estado del evento actualizado exitosamente.',
+      event: updated,
+    })
+  } catch (error: any) {
+    console.error('Error al actualizar estado del evento:', error)
+    const isNotFound = error.message.includes('no encontrado')
+    const isValidation = error.message.includes('invalido')
+    const statusCode = isNotFound ? 404 : isValidation ? 400 : 500
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al actualizar el estado del evento.',
       error: error.message,
     })
   }

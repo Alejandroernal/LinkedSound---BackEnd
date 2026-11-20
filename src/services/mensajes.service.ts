@@ -1,4 +1,4 @@
-import { query } from '../config/db.js'
+import { query, getClient } from '../config/db.js'
 import type { SendMessageDTO } from '../models/mensajes.model.js'
 
 export class MensajesService {
@@ -129,11 +129,11 @@ export class MensajesService {
   }
 
   /**
-   * Obtiene los mensajes ordenados cronológicamente y marca como leídos con readAt.
+   * Obtiene los mensajes con paginacion real, ordenados cronologicamente y marca como leidos con readAt.
    */
-  async getConversationMessages(userId: string, conversationId: string) {
+  async getConversationMessages(userId: string, conversationId: string, page = 1, limit = 50) {
     if (!userId || !conversationId) {
-      throw new Error('Parámetros de conversación inválidos.')
+      throw new Error('Parametros de conversacion invalidos.')
     }
 
     const conv = await query(`
@@ -149,12 +149,24 @@ export class MensajesService {
       throw err
     }
 
-    // Marcar mensajes entrantes como leídos registrando readAt
+    // Marcar mensajes entrantes como leidos registrando readAt
     await query(`
       UPDATE "Message"
       SET "isRead" = true, "readAt" = CURRENT_TIMESTAMP
       WHERE "conversationId" = $1 AND "senderId" <> $2 AND "isRead" = false;
     `, [conversationId, userId])
+
+    // Conteo total para paginacion real
+    const countRes = await query(`
+      SELECT COUNT(*)::int AS total
+      FROM "Message"
+      WHERE "conversationId" = $1;
+    `, [conversationId])
+    const total = countRes.rows[0]?.total || 0
+
+    const validPage = Math.max(1, page)
+    const validLimit = Math.max(1, Math.min(limit, 100))
+    const offset = (validPage - 1) * validLimit
 
     const { rows: messages } = await query(`
       SELECT 
@@ -165,10 +177,11 @@ export class MensajesService {
       FROM "Message" m
       LEFT JOIN "User" u ON m."senderId" = u.id
       WHERE m."conversationId" = $1
-      ORDER BY m."createdAt" ASC;
-    `, [conversationId])
+      ORDER BY m."createdAt" ASC
+      LIMIT $2 OFFSET $3;
+    `, [conversationId, validLimit, offset])
 
-    return messages.map((m: any) => {
+    const formattedMessages = messages.map((m: any) => {
       const isMe = m.senderId === userId
       const timeStr = m.createdAt
         ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -210,6 +223,17 @@ export class MensajesService {
         createdAt: m.createdAt,
       }
     })
+
+    return {
+      messages: formattedMessages,
+      pagination: {
+        total,
+        page: validPage,
+        limit: validLimit,
+        totalPages: Math.ceil(total / validLimit) || 1,
+        hasMore: offset + messages.length < total,
+      },
+    }
   }
 
   /**
@@ -332,21 +356,56 @@ export class MensajesService {
   }
 
   /**
-   * Elimina una conversación y sus mensajes en cascada.
+   * Elimina una conversacion y sus mensajes, revocando completamente el vinculo
+   * entre los usuarios mediante la eliminacion sincronizada de Match e Interacciones.
    */
   async deleteConversation(userId: string, conversationId: string) {
-    const res = await query(`
-      DELETE FROM "Conversation"
-      WHERE id = $1 AND ("user1Id" = $2 OR "user2Id" = $2)
-      RETURNING id;
-    `, [conversationId, userId])
+    const client = await getClient()
 
-    if (res.rowCount === 0) {
-      const err = new Error('Conversacion no encontrada o sin autorizacion.')
-      ;(err as any).statusCode = 404
+    try {
+      await client.query('BEGIN')
+
+      // Verificar pertenencia y obtener ambos participantes
+      const convRes = await client.query(`
+        SELECT id, "user1Id", "user2Id"
+        FROM "Conversation"
+        WHERE id = $1 AND ("user1Id" = $2 OR "user2Id" = $2)
+        LIMIT 1;
+      `, [conversationId, userId])
+
+      if (convRes.rows.length === 0) {
+        const err = new Error('Conversacion no encontrada o sin autorizacion.')
+        ;(err as any).statusCode = 404
+        throw err
+      }
+
+      const { user1Id, user2Id } = convRes.rows[0]
+
+      // 1. Eliminar la conversacion (los mensajes asociados se eliminan en cascada)
+      await client.query(`DELETE FROM "Conversation" WHERE id = $1;`, [conversationId])
+
+      // 2. Revocar completamente el vinculo: eliminar el Match reciproco existente
+      await client.query(`
+        DELETE FROM "Match"
+        WHERE ("user1Id" = $1 AND "user2Id" = $2)
+           OR ("user1Id" = $2 AND "user2Id" = $1);
+      `, [user1Id, user2Id])
+
+      // 3. Eliminar todas las interacciones (likes y descartes) entre ambos usuarios
+      await client.query(`
+        DELETE FROM "Interaction"
+        WHERE ("senderId" = $1 AND "receiverId" = $2)
+           OR ("senderId" = $2 AND "receiverId" = $1);
+      `, [user1Id, user2Id])
+
+      await client.query('COMMIT')
+      return { success: true, message: 'Conversacion, match e interacciones revocadas exitosamente.' }
+    } catch (err) {
+      await client.query('ROLLBACK')
       throw err
+    } finally {
+      client.release()
     }
-    return { success: true, message: 'Conversacion eliminada exitosamente.' }
   }
 }
 

@@ -1,9 +1,14 @@
 import { Router } from 'express'
 import { getReports, createReport, updateReport } from '../controllers/report.controller.js'
-import { optionalAuthenticate } from '../middlewares/auth.middleware.js'
+import { authenticate, authorizeRole } from '../middlewares/auth.middleware.js'
 
 export const reportRouter = Router()
 
-reportRouter.get('/', getReports)
-reportRouter.post('/', optionalAuthenticate, createReport)
-reportRouter.patch('/:id', optionalAuthenticate, updateReport)
+// Consultar reportes: exclusivo para administradores
+reportRouter.get('/', authenticate, authorizeRole('Administrador'), getReports)
+
+// Crear reporte: disponible para usuarios autenticados
+reportRouter.post('/', authenticate, createReport)
+
+// Moderar / actualizar resolucion de reporte: exclusivo para administradores
+reportRouter.patch('/:id', authenticate, authorizeRole('Administrador'), updateReport)

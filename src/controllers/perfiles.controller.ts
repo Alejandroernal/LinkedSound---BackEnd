@@ -69,3 +69,46 @@ export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
     return res.status(500).json({ success: false, message: 'Error al listar usuarios', error: error.message })
   }
 }
+
+export const updateUserStatus = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const adminUserId = req.user?.userId || ''
+    const targetUserId = String(req.params.id)
+    const { status, justification } = req.body
+
+    const updatedUser = await perfilesService.updateUserStatus(adminUserId, targetUserId, status, justification)
+    return res.status(200).json({
+      success: true,
+      message: 'Estado de cuenta actualizado exitosamente',
+      user: updatedUser,
+    })
+  } catch (error: any) {
+    console.error('Error al actualizar estado de cuenta:', error)
+    const isValidation = error.message.includes('obligatoria') || error.message.includes('invalido')
+    const isNotFound = error.message.includes('no encontrado')
+    const statusCode = isNotFound ? 404 : isValidation ? 400 : 500
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al actualizar estado del usuario',
+      error: error.message,
+    })
+  }
+}
+
+export const deleteUser = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const adminUserId = req.user?.userId || ''
+    const targetUserId = String(req.params.id)
+
+    const result = await perfilesService.deleteUser(adminUserId, targetUserId)
+    return res.status(200).json(result)
+  } catch (error: any) {
+    console.error('Error al dar de baja usuario:', error)
+    const isNotFound = error.message.includes('no encontrado')
+    return res.status(isNotFound ? 404 : 500).json({
+      success: false,
+      message: error.message || 'Error al dar de baja el usuario',
+      error: error.message,
+    })
+  }
+}

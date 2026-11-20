@@ -371,6 +371,31 @@ export class PerfilesService {
    */
   async getUsers(currentUserId?: string, currentUserRole?: string, includeAll?: boolean) {
     const shouldExcludeSelf = currentUserId && !includeAll && currentUserRole !== 'Administrador'
+    const conditions: string[] = []
+    const params: any[] = []
+    let pIdx = 1
+
+    if (shouldExcludeSelf) {
+      conditions.push(`u.id <> $${pIdx++}`)
+      params.push(currentUserId)
+    }
+
+    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir al menos una pista vinculada de SoundCloud o audio
+    if (!includeAll && currentUserRole !== 'Administrador') {
+      conditions.push(`(
+        (u."soundcloudUrl" IS NOT NULL AND TRIM(u."soundcloudUrl") <> '')
+        OR EXISTS (
+          SELECT 1 FROM "Track" t 
+          WHERE t."userId" = u.id 
+            AND (
+              (t."soundcloudLink" IS NOT NULL AND TRIM(t."soundcloudLink") <> '')
+              OR (t."audioUrl" IS NOT NULL AND TRIM(t."audioUrl") <> '')
+            )
+        )
+      )`)
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
     const sql = `
       SELECT 
@@ -388,10 +413,9 @@ export class PerfilesService {
       FROM "User" u
       LEFT JOIN "UserStatus" s ON u."statusId" = s.id
       LEFT JOIN "Location" l ON u."locationId" = l.id
-      ${shouldExcludeSelf ? 'WHERE u.id <> $1' : ''}
+      ${whereClause}
       ORDER BY u."createdAt" DESC;
     `
-    const params = shouldExcludeSelf ? [currentUserId] : []
     const usersRes = await query(sql, params)
     const users = usersRes.rows
 
@@ -439,6 +463,105 @@ export class PerfilesService {
       }
       return formatUserResponse(userPayload)
     })
+  }
+
+  /**
+   * Administracion: Actualiza el estado de una cuenta (Active, Suspended, Banned, Inactive)
+   * exigiendo justificacion para sanciones o suspensiones.
+   */
+  async updateUserStatus(adminUserId: string, targetUserId: string, status: string, justification?: string) {
+    if (!targetUserId) throw new Error('ID de usuario requerido.')
+    const normalizedStatus = String(status || '').trim()
+
+    if (!['Active', 'Suspended', 'Banned', 'Inactive'].includes(normalizedStatus)) {
+      throw new Error('Estado de usuario invalido. Debe ser Active, Suspended, Banned o Inactive.')
+    }
+
+    if ((normalizedStatus === 'Suspended' || normalizedStatus === 'Banned') && (!justification || !justification.trim())) {
+      throw new Error('La justificacion de la suspension o sancion es obligatoria.')
+    }
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+
+      const uRes = await client.query(`SELECT id, nickname, email FROM "User" WHERE id = $1 LIMIT 1;`, [targetUserId])
+      if (uRes.rows.length === 0) {
+        throw new Error('Usuario objetivo no encontrado.')
+      }
+      const targetUser = uRes.rows[0]
+
+      const statusRes = await client.query(`
+        INSERT INTO "UserStatus" (id, name, "createdAt")
+        VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id;
+      `, [normalizedStatus])
+      const statusId = statusRes.rows[0].id
+
+      await client.query(`
+        UPDATE "User"
+        SET "statusId" = $1, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE id = $2;
+      `, [statusId, targetUserId])
+
+      // Notificar al usuario afectado
+      const motive = justification?.trim() || 'Modificacion de estado administrativa.'
+      await client.query(`
+        INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
+        VALUES (gen_random_uuid(), $1, 'Actualizacion de Estado', $2, 'system', 'Profile', false, CURRENT_TIMESTAMP);
+      `, [targetUserId, `Tu cuenta ha cambiado a estado "${normalizedStatus}". Motivo: "${motive}"`])
+
+      // Registrar accion en log de auditoria
+      await client.query(`
+        INSERT INTO "UserActivityLog" (id, "userId", action, ip, device, module, "createdAt")
+        VALUES (gen_random_uuid(), $1, $2, '127.0.0.1', 'Admin Panel', 'Perfil', CURRENT_TIMESTAMP);
+      `, [adminUserId || targetUserId, `Cambio estado del usuario "${targetUser.nickname}" a ${normalizedStatus}. Motivo: "${motive}"`])
+
+      await client.query('COMMIT')
+      return await this.getProfileById(targetUserId)
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Administracion: Da de baja / elimina una cuenta de usuario.
+   */
+  async deleteUser(adminUserId: string, targetUserId: string) {
+    if (!targetUserId) throw new Error('ID de usuario requerido.')
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+
+      const uRes = await client.query(`SELECT id, nickname FROM "User" WHERE id = $1 LIMIT 1;`, [targetUserId])
+      if (uRes.rows.length === 0) {
+        throw new Error('Usuario objetivo no encontrado.')
+      }
+
+      // Eliminar registros de usuario en cascada
+      await client.query(`DELETE FROM "Conversation" WHERE "user1Id" = $1 OR "user2Id" = $1;`, [targetUserId])
+      await client.query(`DELETE FROM "Match" WHERE "user1Id" = $1 OR "user2Id" = $1;`, [targetUserId])
+      await client.query(`DELETE FROM "Interaction" WHERE "senderId" = $1 OR "receiverId" = $1;`, [targetUserId])
+      await client.query(`DELETE FROM "User" WHERE id = $1;`, [targetUserId])
+
+      await client.query(`
+        INSERT INTO "UserActivityLog" (id, "userId", action, ip, device, module, "createdAt")
+        VALUES (gen_random_uuid(), $1, $2, '127.0.0.1', 'Admin Panel', 'Perfil', CURRENT_TIMESTAMP);
+      `, [adminUserId, `Dio de baja al usuario ID "${targetUserId}"`])
+
+      await client.query('COMMIT')
+      return { success: true, message: 'Usuario dado de baja exitosamente.' }
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   }
 }
 
