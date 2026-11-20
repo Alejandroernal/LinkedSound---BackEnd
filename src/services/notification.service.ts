@@ -9,6 +9,7 @@ export interface FormattedNotification {
   readAt: string | null
   type: string
   linkPage: string
+  senderId?: string | null
   timestamp: string
   createdAt: string
 }
@@ -36,7 +37,7 @@ export class NotificationService {
     }
 
     const sql = `
-      SELECT id, title, message, "isRead", "readAt", type, "linkPage", "createdAt"
+      SELECT id, title, message, "isRead", "readAt", type, "linkPage", "senderId", "createdAt"
       FROM "Notification"
       WHERE "userId" = $1
       ORDER BY "createdAt" DESC
@@ -53,6 +54,7 @@ export class NotificationService {
       readAt: n.readAt,
       type: n.type,
       linkPage: n.linkPage || 'Discovery',
+      senderId: n.senderId || null,
       timestamp: formatRelativeTime(new Date(n.createdAt)),
       createdAt: n.createdAt,
     }))
@@ -102,10 +104,11 @@ export class NotificationService {
     message: string
     type: string
     linkPage?: string
+    senderId?: string
   }): Promise<any> {
     const sql = `
-      INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
-      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, false, CURRENT_TIMESTAMP)
+      INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "senderId", "isRead", "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, CURRENT_TIMESTAMP)
       RETURNING *;
     `
     const res = await query(sql, [
@@ -114,6 +117,7 @@ export class NotificationService {
       data.message,
       data.type,
       data.linkPage || 'Discovery',
+      data.senderId || null,
     ])
     return res.rows[0]
   }

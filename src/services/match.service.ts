@@ -240,9 +240,9 @@ export class MatchService {
 
         if (notifExists.rows.length === 0) {
           await client.query(`
-            INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
-            VALUES (gen_random_uuid(), $1, 'Solicitud de Match', $2, 'match_request', 'Discovery', false, CURRENT_TIMESTAMP);
-          `, [targetUserId, `${senderDisplayName} quiere conectar y colaborar contigo.`])
+            INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "senderId", "isRead", "createdAt")
+            VALUES (gen_random_uuid(), $1, 'Solicitud de Match', $2, 'match_request', 'Discovery', $3, false, CURRENT_TIMESTAMP);
+          `, [targetUserId, `${senderDisplayName} quiere conectar y colaborar contigo.`, senderId])
         }
 
         await client.query('COMMIT')
@@ -355,20 +355,22 @@ export class MatchService {
       // Crear notificaciones de Match Mutuo para ambos usuarios en PostgreSQL
       await Promise.all([
         client.query(`
-          INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
-          VALUES (gen_random_uuid(), $1, $2, $3, 'match', 'Messages', false, CURRENT_TIMESTAMP);
+          INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "senderId", "isRead", "createdAt")
+          VALUES (gen_random_uuid(), $1, $2, $3, 'match', 'Messages', $4, false, CURRENT_TIMESTAMP);
         `, [
           senderId,
           `Nuevo Match con ${partnerPayload.nickname || partnerPayload.name}`,
-          `${partnerPayload.nickname || partnerPayload.name} y tu han conectado. Ya pueden colaborar en Mensajes.`
+          `${partnerPayload.nickname || partnerPayload.name} y tu han conectado. Ya pueden colaborar en Mensajes.`,
+          targetUserId,
         ]),
         client.query(`
-          INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
-          VALUES (gen_random_uuid(), $1, $2, $3, 'match', 'Messages', false, CURRENT_TIMESTAMP);
+          INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "senderId", "isRead", "createdAt")
+          VALUES (gen_random_uuid(), $1, $2, $3, 'match', 'Messages', $4, false, CURRENT_TIMESTAMP);
         `, [
           targetUserId,
           `Nuevo Match con ${senderDisplayName}`,
-          `${senderDisplayName} y tu han conectado. Ya pueden colaborar en Mensajes.`
+          `${senderDisplayName} y tu han conectado. Ya pueden colaborar en Mensajes.`,
+          senderId,
         ])
       ])
 
