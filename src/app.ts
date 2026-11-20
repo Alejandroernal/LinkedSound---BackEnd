@@ -7,10 +7,20 @@ import { errorMiddleware } from './middlewares/error.middleware.js'
 export const createApp = (): Application => {
   const app = express()
 
-  // Middlewares globales
+  // Middlewares globales con soporte para localhost y dominios de Vercel
+  const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+    .split(',')
+    .map((url) => url.trim())
+
   app.use(
     cors({
-      origin: config.clientUrl,
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || origin.endsWith('.vercel.app')) {
+          callback(null, true)
+        } else {
+          callback(null, true)
+        }
+      },
       credentials: true,
     })
   )

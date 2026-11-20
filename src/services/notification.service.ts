@@ -96,6 +96,18 @@ export class NotificationService {
   }
 
   /**
+   * Registra el token FCM para notificaciones push en segundo plano.
+   */
+  async saveFcmToken(userId: string, token: string): Promise<void> {
+    const sql = `
+      UPDATE "User"
+      SET "fcmToken" = $1
+      WHERE id = $2;
+    `
+    await query(sql, [token, userId])
+  }
+
+  /**
    * Crea una notificación para un usuario (utilizado por matching, eventos, reportes).
    */
   async createNotification(data: {

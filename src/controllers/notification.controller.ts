@@ -95,3 +95,31 @@ export const clearNotifications = async (req: AuthenticatedRequest, res: Respons
     })
   }
 }
+
+export const registerFcmToken = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.userId
+    const { token } = req.body
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })
+    }
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token FCM requerido.' })
+    }
+
+    await notificationService.saveFcmToken(userId, token)
+
+    return res.status(200).json({
+      success: true,
+      message: 'Token FCM registrado exitosamente.',
+    })
+  } catch (error: any) {
+    console.error('Error al registrar token FCM:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error al registrar token FCM.',
+      error: error.message,
+    })
+  }
+}
