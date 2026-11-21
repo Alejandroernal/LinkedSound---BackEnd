@@ -1,4 +1,5 @@
 import { query, getClient } from '../config/db.js'
+import { fcmService } from './fcm.service.js'
 import type {
   AffinityResult,
   ProximityResult,
@@ -246,6 +247,17 @@ export class MatchService {
 
         await client.query('COMMIT')
 
+        // Disparar push de solicitud de conexion al destinatario
+        fcmService.sendToUser(targetUserId, {
+          title: 'Solicitud de Match',
+          body: `${senderDisplayName} quiere conectar y colaborar contigo.`,
+          linkPage: 'Discovery',
+          data: {
+            senderId,
+            type: 'match_request',
+          },
+        }).catch(() => {})
+
         return {
           isMatch: false,
           message: 'Like registrado exitosamente. En espera de conexion mutua.',
@@ -375,6 +387,19 @@ export class MatchService {
 
       await client.query('COMMIT')
 
+      // Disparar notificaciones push FCM en tiempo real para ambos usuarios
+      fcmService.sendToUser(senderId, {
+        title: `Nuevo Match con ${partnerPayload.nickname || partnerPayload.name}`,
+        body: 'Han conectado en LinkedSound. Ya pueden colaborar y chatear.',
+        linkPage: 'Messages',
+      }).catch(() => {})
+
+      fcmService.sendToUser(targetUserId, {
+        title: `Nuevo Match con ${senderDisplayName}`,
+        body: 'Han conectado en LinkedSound. Ya pueden colaborar y chatear.',
+        linkPage: 'Messages',
+      }).catch(() => {})
+
       const conversationPayload = {
         id: convRecord.id,
         name: partnerPayload.nickname || partnerPayload.name,
@@ -455,6 +480,7 @@ export class MatchService {
       `, [senderId, targetUserId])
 
       await client.query('COMMIT')
+
       return { success: true, message: 'Match y conversacion eliminados correctamente.' }
     } catch (err) {
       await client.query('ROLLBACK')

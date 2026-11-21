@@ -1,4 +1,5 @@
 import { query, getClient } from '../config/db.js'
+import { fcmService } from './fcm.service.js'
 import type { SendMessageDTO } from '../models/mensajes.model.js'
 
 export class MensajesService {
@@ -292,6 +293,23 @@ export class MensajesService {
       SET "updatedAt" = CURRENT_TIMESTAMP
       WHERE id = $1;
     `, [conversationId])
+
+    const recipientId = conv.rows[0].user1Id === userId ? conv.rows[0].user2Id : conv.rows[0].user1Id
+
+    // Disparar notificacion push FCM al destinatario
+    query('SELECT "firstName", "lastName", nickname FROM "User" WHERE id = $1 LIMIT 1;', [userId]).then((senderRes) => {
+      const u = senderRes.rows[0]
+      const senderName = u ? (u.nickname || `${u.firstName || ''} ${u.lastName || ''}`.trim() || 'Un creador') : 'Un creador'
+      fcmService.sendToUser(recipientId, {
+        title: `Nuevo mensaje de ${senderName}`,
+        body: text ? text.trim() : (attachmentName ? `[Archivo] ${attachmentName}` : 'Te ha enviado un archivo'),
+        linkPage: 'Messages',
+        data: {
+          conversationId,
+          senderId: userId,
+        },
+      }).catch(() => {})
+    }).catch(() => {})
 
     const newMsg = msgRows[0]
     const timeStr = new Date(newMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

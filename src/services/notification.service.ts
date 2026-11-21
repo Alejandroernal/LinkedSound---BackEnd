@@ -1,4 +1,5 @@
 import { query } from '../config/db.js'
+import { fcmService } from './fcm.service.js'
 
 export interface FormattedNotification {
   id: string
@@ -131,6 +132,20 @@ export class NotificationService {
       data.linkPage || 'Discovery',
       data.senderId || null,
     ])
+
+    // Disparar envío push en segundo plano mediante Firebase Cloud Messaging
+    fcmService.sendToUser(data.userId, {
+      title: data.title,
+      body: data.message,
+      linkPage: data.linkPage || 'Discovery',
+      data: {
+        type: data.type,
+        senderId: data.senderId || '',
+      },
+    }).catch((err) => {
+      console.warn('[FCM Notification Hook Error]', err)
+    })
+
     return res.rows[0]
   }
 }
