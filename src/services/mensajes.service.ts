@@ -105,6 +105,8 @@ export class MensajesService {
         status: otherStatus || 'Online',
         preview: lastMessagePreview,
         time: timeStr,
+        lastMessageCreatedAt: lastMessageTime,
+        updatedAt: c.updatedAt,
         unread: unreadMap.get(c.id) || 0,
         pinned: Boolean(c.pinned),
         muted: Boolean(c.muted),
