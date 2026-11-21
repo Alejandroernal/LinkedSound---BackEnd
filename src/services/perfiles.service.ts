@@ -380,18 +380,13 @@ export class PerfilesService {
       params.push(currentUserId)
     }
 
-    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir al menos una pista vinculada de SoundCloud o audio
+    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir al menos una pista de SoundCloud vinculada en la entidad Track
     if (!includeAll && currentUserRole !== 'Administrador') {
-      conditions.push(`(
-        (u."soundcloudUrl" IS NOT NULL AND TRIM(u."soundcloudUrl") <> '')
-        OR EXISTS (
-          SELECT 1 FROM "Track" t 
-          WHERE t."userId" = u.id 
-            AND (
-              (t."soundcloudLink" IS NOT NULL AND TRIM(t."soundcloudLink") <> '')
-              OR (t."audioUrl" IS NOT NULL AND TRIM(t."audioUrl") <> '')
-            )
-        )
+      conditions.push(`EXISTS (
+        SELECT 1 FROM "Track" t 
+        WHERE t."userId" = u.id 
+          AND t."soundcloudLink" IS NOT NULL 
+          AND TRIM(t."soundcloudLink") <> ''
       )`)
     }
 

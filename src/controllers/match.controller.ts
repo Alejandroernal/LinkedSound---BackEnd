@@ -114,8 +114,9 @@ export const getAffinityPreview = async (req: AuthenticatedRequest, res: Respons
       return res.status(400).json({ success: false, message: 'userA y userB son requeridos' })
     }
 
-    const affinity = calculateAffinity(userA, userB)
     const proximity = calculateProximity(userA.latitude, userA.longitude, userB.latitude, userB.longitude)
+    const distanceKm = proximity.distanceKm >= 0 ? proximity.distanceKm : null
+    const affinity = calculateAffinity(userA, userB, distanceKm)
 
     return res.status(200).json({ success: true, affinity, proximity })
   } catch (error: any) {

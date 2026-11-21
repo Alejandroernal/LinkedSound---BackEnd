@@ -207,13 +207,12 @@ export class MatchService {
         SELECT id FROM "Conversation" WHERE "user1Id" = $1 AND "user2Id" = $2 LIMIT 1;
       `, [u1, u2])
 
-      // Deteccion estricta de reciprocidad: verificar si existe un like real en Interaction
+      // Reciprocidad estricta (RF-02): isMatch se activa UNICAMENTE si existe un like real previo (Interaction.isLike = true)
       const targetLikeCheck = await client.query(`
         SELECT "isLike" FROM "Interaction" WHERE "senderId" = $1 AND "receiverId" = $2 LIMIT 1;
       `, [targetUserId, senderId])
 
-      const hasReciprocalLike = targetLikeCheck.rows.length > 0 && targetLikeCheck.rows[0].isLike === true
-      const isMatch = Boolean(matchCheck.rows.length > 0 || convCheck.rows.length > 0 || hasReciprocalLike)
+      const isMatch = targetLikeCheck.rows.length > 0 && targetLikeCheck.rows[0].isLike === true
 
       const senderRes = await client.query(`
         SELECT 

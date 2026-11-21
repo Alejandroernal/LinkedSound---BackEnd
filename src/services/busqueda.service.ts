@@ -70,17 +70,12 @@ export class BusquedaService {
       pIdx++
     }
 
-    // RF-01 / RF-02: Exigir pista de SoundCloud o audio vinculada para visibilidad en matching
-    conditions.push(`(
-      (u."soundcloudUrl" IS NOT NULL AND TRIM(u."soundcloudUrl") <> '')
-      OR EXISTS (
-        SELECT 1 FROM "Track" t 
-        WHERE t."userId" = u.id 
-          AND (
-            (t."soundcloudLink" IS NOT NULL AND TRIM(t."soundcloudLink") <> '')
-            OR (t."audioUrl" IS NOT NULL AND TRIM(t."audioUrl") <> '')
-          )
-      )
+    // RF-01 / RF-02: Exigir al menos una pista de SoundCloud vinculada en Track para visibilidad en matching
+    conditions.push(`EXISTS (
+      SELECT 1 FROM "Track" t 
+      WHERE t."userId" = u.id 
+        AND t."soundcloudLink" IS NOT NULL 
+        AND TRIM(t."soundcloudLink") <> ''
     )`)
 
     let distanceSelect = 'NULL AS "distanciaKm"'
