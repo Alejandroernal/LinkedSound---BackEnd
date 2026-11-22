@@ -2,6 +2,29 @@ import { query, getClient } from '../config/db.js'
 import { hashPassword, comparePassword } from '../utils/password.js'
 import { generateToken } from '../utils/jwt.js'
 import { perfilesService, formatUserResponse } from './perfiles.service.js'
+import { emailService } from './email.service.js'
+
+let isPasswordResetTableReady = false
+
+async function ensurePasswordResetTable(): Promise<void> {
+  if (isPasswordResetTableReady) return
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS "PasswordReset" (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email VARCHAR(255) NOT NULL,
+        code VARCHAR(6) NOT NULL,
+        "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
+        verified BOOLEAN DEFAULT FALSE,
+        "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS "idx_password_reset_email" ON "PasswordReset" (LOWER(email));
+    `)
+    isPasswordResetTableReady = true
+  } catch (err) {
+    console.warn('[AuthService] Error asegurando tabla PasswordReset:', err)
+  }
+}
 
 function toSlug(str: string): string {
   return str
@@ -314,6 +337,180 @@ export class AuthService {
 
   async getUsers(currentUserId?: string, currentUserRole?: string, includeAll?: boolean) {
     return perfilesService.getUsers(currentUserId, currentUserRole, includeAll)
+  }
+
+  /**
+   * Solicita codigo de 6 digitos para recuperacion de contrasena validando la existencia de la cuenta.
+   */
+  async forgotPassword(email: string) {
+    if (!email || !email.trim()) {
+      const err = new Error('Por favor, ingresa tu correo electronico.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    await ensurePasswordResetTable()
+
+    const normalizedEmail = email.trim().toLowerCase()
+
+    // 1. Validar si existe una cuenta registrada con este correo
+    const userRes = await query(`
+      SELECT id, email, "firstName", nickname, "accountRole"
+      FROM "User"
+      WHERE LOWER(email) = LOWER($1)
+      LIMIT 1;
+    `, [normalizedEmail])
+
+    if (userRes.rows.length === 0) {
+      const err = new Error('No existe ninguna cuenta registrada con este correo electronico.')
+      ;(err as any).statusCode = 404
+      throw err
+    }
+
+    const user = userRes.rows[0]
+    const recipientName = user.nickname || user.firstName || 'Creador'
+
+    // 2. Generar codigo numerico criptografico de 6 digitos
+    const code = Math.floor(100000 + Math.random() * 900000).toString()
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutos
+
+    // 3. Eliminar codigos previos no confirmados para este correo
+    await query(`DELETE FROM "PasswordReset" WHERE LOWER(email) = LOWER($1);`, [normalizedEmail])
+
+    // 4. Almacenar el codigo en la tabla
+    await query(`
+      INSERT INTO "PasswordReset" (id, email, code, "expiresAt", verified, "createdAt")
+      VALUES (gen_random_uuid(), $1, $2, $3, false, CURRENT_TIMESTAMP);
+    `, [normalizedEmail, code, expiresAt])
+
+    // 5. Enviar el correo electronico real a traves del servicio de email
+    await emailService.sendPasswordResetCode(normalizedEmail, code, recipientName)
+
+    return {
+      success: true,
+      message: `Codigo de verificacion de 6 digitos enviado a ${normalizedEmail}.`,
+    }
+  }
+
+  /**
+   * Valida el codigo de 6 digitos ingresado por el usuario.
+   */
+  async verifyResetCode(email: string, code: string) {
+    if (!email || !code) {
+      const err = new Error('Correo y codigo son obligatorios.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    await ensurePasswordResetTable()
+
+    const normalizedEmail = email.trim().toLowerCase()
+    const cleanCode = code.trim()
+
+    const res = await query(`
+      SELECT id, code, "expiresAt", verified
+      FROM "PasswordReset"
+      WHERE LOWER(email) = LOWER($1)
+      ORDER BY "createdAt" DESC
+      LIMIT 1;
+    `, [normalizedEmail])
+
+    if (res.rows.length === 0 || res.rows[0].code !== cleanCode) {
+      const err = new Error('El codigo de verificacion es incorrecto.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    const resetRecord = res.rows[0]
+    if (new Date() > new Date(resetRecord.expiresAt)) {
+      const err = new Error('El codigo de verificacion ha expirado. Por favor solicita uno nuevo.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    // Marcar como verificado para habilitar el cambio de clave
+    await query(`UPDATE "PasswordReset" SET verified = true WHERE id = $1;`, [resetRecord.id])
+
+    return {
+      success: true,
+      message: 'Codigo verificado correctamente.',
+    }
+  }
+
+  /**
+   * Restablece la contrasena del usuario una vez verificado el codigo.
+   */
+  async resetPassword(email: string, code: string, newPass: string) {
+    if (!email || !code || !newPass) {
+      const err = new Error('Todos los campos son obligatorios.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    await ensurePasswordResetTable()
+
+    const normalizedEmail = email.trim().toLowerCase()
+    const cleanCode = code.trim()
+
+    if (newPass.length < 8) {
+      const err = new Error('La contrasena debe tener al menos 8 caracteres.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+    if (!/[A-Z]/.test(newPass)) {
+      const err = new Error('La contrasena debe incluir al menos una letra mayuscula.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+    if (!/[a-z]/.test(newPass)) {
+      const err = new Error('La contrasena debe incluir al menos una letra minuscula.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+    if (!/[0-9]/.test(newPass)) {
+      const err = new Error('La contrasena debe incluir al menos un numero.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    // Verificar que exista registro valido y verificado
+    const res = await query(`
+      SELECT id, "expiresAt", verified
+      FROM "PasswordReset"
+      WHERE LOWER(email) = LOWER($1) AND code = $2 AND verified = true
+      ORDER BY "createdAt" DESC
+      LIMIT 1;
+    `, [normalizedEmail, cleanCode])
+
+    if (res.rows.length === 0) {
+      const err = new Error('No se ha verificado el codigo para esta cuenta o la sesion ha expirado.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    if (new Date() > new Date(res.rows[0].expiresAt)) {
+      const err = new Error('La sesion de restablecimiento ha expirado. Inicia el proceso nuevamente.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    // Hashear nueva contrasena con bcrypt
+    const hashedPassword = await hashPassword(newPass)
+
+    // Actualizar en base de datos PostgreSQL
+    await query(`
+      UPDATE "User"
+      SET password = $1, "updatedAt" = CURRENT_TIMESTAMP
+      WHERE LOWER(email) = LOWER($2);
+    `, [hashedPassword, normalizedEmail])
+
+    // Limpiar tokens de reseteo usados
+    await query(`DELETE FROM "PasswordReset" WHERE LOWER(email) = LOWER($1);`, [normalizedEmail])
+
+    return {
+      success: true,
+      message: 'Contrasena actualizada exitosamente. Ya puedes iniciar sesion con tu nueva clave.',
+    }
   }
 }
 

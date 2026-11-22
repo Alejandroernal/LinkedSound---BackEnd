@@ -48,4 +48,32 @@ describe('Modulo de Autenticacion y Seguridad (Password y JWT)', () => {
       verifyToken(tamperedToken)
     })
   })
+
+  it('debe rechazar solicitudes de recuperacion si el correo no existe en la base de datos', async () => {
+    const { authService } = await import('../services/auth.service.js')
+    await assert.rejects(
+      async () => {
+        await authService.forgotPassword('correo_totalmente_inexistente_9999@linkedsound.test')
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 404)
+        assert.ok(err.message.includes('No existe ninguna cuenta'))
+        return true
+      }
+    )
+  })
+
+  it('debe validar la complejidad minima de la nueva contrasena al restablecer', async () => {
+    const { authService } = await import('../services/auth.service.js')
+    await assert.rejects(
+      async () => {
+        await authService.resetPassword('test@linkedsound.test', '123456', 'corta')
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 400)
+        assert.ok(err.message.includes('8 caracteres'))
+        return true
+      }
+    )
+  })
 })

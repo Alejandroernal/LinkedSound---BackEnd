@@ -75,3 +75,45 @@ export const getMe = async (req: AuthenticatedRequest, res: Response) => {
 export const updateProfile = updateProfilePerfiles
 export const getGenres = getGenresPerfiles
 export const getUsers = getUsersPerfiles
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body
+    const result = await authService.forgotPassword(email)
+    return res.status(200).json(result)
+  } catch (error: any) {
+    const statusCode = error.statusCode || 500
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al procesar solicitud de recuperacion',
+    })
+  }
+}
+
+export const verifyResetCode = async (req: Request, res: Response) => {
+  try {
+    const { email, code } = req.body
+    const result = await authService.verifyResetCode(email, code)
+    return res.status(200).json(result)
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al verificar codigo',
+    })
+  }
+}
+
+export const resetPassword = async (req: Request, res: Response) => {
+  try {
+    const { email, code, newPassword } = req.body
+    const result = await authService.resetPassword(email, code, newPassword)
+    return res.status(200).json(result)
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al restablecer la contrasena',
+    })
+  }
+}
