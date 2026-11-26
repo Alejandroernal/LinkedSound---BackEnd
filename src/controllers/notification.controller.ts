@@ -109,6 +109,7 @@ export const registerFcmToken = async (req: AuthenticatedRequest, res: Response)
     }
 
     await notificationService.saveFcmToken(userId, token)
+    console.log(`[FCM] Token registrado en DB para usuario ${userId}: ${String(token).slice(0, 20)}...`)
 
     return res.status(200).json({
       success: true,

@@ -22,6 +22,9 @@ function initFirebaseAdmin(): boolean {
     const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT
     if (serviceAccountJson) {
       const parsed = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson
+      if (typeof parsed?.private_key === 'string') {
+        parsed.private_key = parsed.private_key.replace(/\\n/g, '\n')
+      }
       initializeApp({
         credential: cert(parsed),
       })
@@ -93,15 +96,34 @@ export class FCMService {
     const adminReady = initFirebaseAdmin()
     if (adminReady) {
       try {
+        const stringifiedData: Record<string, string> = {
+          linkPage: String(payload.linkPage || 'Discovery'),
+        }
+        if (payload.data) {
+          for (const [k, v] of Object.entries(payload.data)) {
+            if (v !== undefined && v !== null) {
+              stringifiedData[k] = String(v)
+            }
+          }
+        }
+
         await getMessaging().send({
           token: fcmToken,
           notification: {
             title: payload.title,
             body: payload.body,
           },
-          data: {
-            linkPage: payload.linkPage || 'Discovery',
-            ...(payload.data || {}),
+          data: stringifiedData,
+          webpush: {
+            notification: {
+              title: payload.title,
+              body: payload.body,
+              icon: '/4147b18c-9b5d-49fe-86fe-07a9023d1d1e.png',
+              badge: '/4147b18c-9b5d-49fe-86fe-07a9023d1d1e.png',
+            },
+            fcmOptions: {
+              link: '/',
+            },
           },
         })
         console.log(`[FCM v1 Push Exitoso] Destino: ${fcmToken.slice(0, 15)}...`)

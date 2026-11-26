@@ -116,6 +116,7 @@ export class PerfilesService {
     }
 
     const {
+      email,
       firstName,
       lastName,
       nickname,
@@ -138,10 +139,40 @@ export class PerfilesService {
       trackUrl,
     } = data
 
+    let normalizedEmail: string | null = null
+    if (email !== undefined && typeof email === 'string') {
+      const trimmedEmail = email.trim().toLowerCase()
+      if (!trimmedEmail) {
+        const err = new Error('El correo electronico es obligatorio')
+        ;(err as any).statusCode = 400
+        throw err
+      }
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(trimmedEmail)) {
+        const err = new Error('El formato del correo electronico no es valido')
+        ;(err as any).statusCode = 400
+        throw err
+      }
+      if (trimmedEmail !== (user.email || '').toLowerCase()) {
+        const checkEmail = await query(
+          `SELECT id FROM "User" WHERE LOWER(email) = LOWER($1) AND id <> $2 LIMIT 1;`,
+          [trimmedEmail, userId]
+        )
+        if (checkEmail.rows.length > 0) {
+          const err = new Error('El correo electronico ya esta registrado por otra cuenta')
+          ;(err as any).statusCode = 409
+          throw err
+        }
+      }
+      normalizedEmail = trimmedEmail
+    }
+
     if (nickname && nickname.trim() !== user.nickname) {
       const checkNick = await query(`SELECT id FROM "User" WHERE LOWER(nickname) = LOWER($1) AND id <> $2 LIMIT 1;`, [nickname.trim(), userId])
       if (checkNick.rows.length > 0) {
-        throw new Error('El nombre de usuario / artistico ya esta en uso por otro creador')
+        const err = new Error('El nombre de usuario / artistico ya esta en uso por otro creador')
+        ;(err as any).statusCode = 409
+        throw err
       }
     }
 
@@ -172,10 +203,20 @@ export class PerfilesService {
       await client.query('BEGIN')
 
       // 1. Ubicación con PostGIS
-      const hasLocationData = location !== undefined || country !== undefined || city !== undefined
+      const hasLocationData =
+        location !== undefined ||
+        country !== undefined ||
+        province !== undefined ||
+        city !== undefined ||
+        streetAddress !== undefined ||
+        latitude !== undefined ||
+        longitude !== undefined
+
       if (hasLocationData) {
-        const latVal = latitude != null && latitude !== '' ? parseFloat(String(latitude)) : null
-        const lonVal = longitude != null && longitude !== '' ? parseFloat(String(longitude)) : null
+        const parsedLat = latitude != null && latitude !== '' ? Number(latitude) : NaN
+        const parsedLon = longitude != null && longitude !== '' ? Number(longitude) : NaN
+        const latVal = Number.isFinite(parsedLat) ? parsedLat : null
+        const lonVal = Number.isFinite(parsedLon) ? parsedLon : null
 
         if (user.locationId) {
           await client.query(`
@@ -185,11 +226,14 @@ export class PerfilesService {
                 province = COALESCE($3, province),
                 city = COALESCE($4, city),
                 "streetAddress" = COALESCE($5, "streetAddress"),
+                latitude = COALESCE($6::double precision, latitude),
+                longitude = COALESCE($7::double precision, longitude),
                 geo_point = CASE 
-                  WHEN $6::numeric IS NOT NULL AND $7::numeric IS NOT NULL 
-                  THEN ST_SetSRID(ST_MakePoint($7, $6), 4326)::geography 
+                  WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL 
+                  THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography 
                   ELSE geo_point 
                 END,
+                srid = 4326,
                 "updatedAt" = CURRENT_TIMESTAMP
             WHERE id = $8;
           `, [
@@ -202,17 +246,18 @@ export class PerfilesService {
             lonVal,
             user.locationId,
           ])
-        } else if (location || city || country) {
+        } else if (location || city || country || (latVal !== null && lonVal !== null)) {
           const locRes = await client.query(`
-            INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", geo_point, srid, "createdAt", "updatedAt")
+            INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", latitude, longitude, geo_point, srid, "createdAt", "updatedAt")
             VALUES (
               gen_random_uuid(), $1, $2, $3, $4, $5,
-              CASE WHEN $6::numeric IS NOT NULL AND $7::numeric IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7, $6), 4326)::geography ELSE NULL END,
+              $6::double precision, $7::double precision,
+              CASE WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
               4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             RETURNING id;
           `, [
-            String(location || 'Sin especificar').trim(),
+            String(location || [city, province, country].filter(Boolean).join(', ') || 'Sin especificar').trim(),
             country ? String(country).trim() : null,
             province ? String(province).trim() : null,
             city ? String(city).trim() : null,
@@ -229,6 +274,10 @@ export class PerfilesService {
       const updateVals: any[] = [userId]
       let pIdx = 2
 
+      if (normalizedEmail) {
+        updateFields.push(`email = $${pIdx++}`)
+        updateVals.push(normalizedEmail)
+      }
       if (updatedHashedPassword) {
         updateFields.push(`password = $${pIdx++}`)
         updateVals.push(updatedHashedPassword)
@@ -308,12 +357,25 @@ export class PerfilesService {
         }
       }
 
-      // 5. Tracks
+      // 5. Tracks (alineado con requisito RF-01/RF-02 de Track.soundcloudLink para visibilidad en matching)
+      const effectiveFallbackScLink =
+        (typeof trackUrl === 'string' && trackUrl.trim() ? trackUrl.trim() : '') ||
+        (typeof soundcloudUrl === 'string' && soundcloudUrl.trim() ? soundcloudUrl.trim() : '') ||
+        (soundcloudUrl === undefined && user.soundcloudUrl ? String(user.soundcloudUrl).trim() : '')
+
       if (Array.isArray(tracks) && tracks.length > 0) {
+        const slicedTracks = tracks.slice(0, 5)
+        const hasAnySoundcloudLink = slicedTracks.some(
+          (t: any) => typeof t?.soundcloudLink === 'string' && t.soundcloudLink.trim().length > 0
+        )
+
         await client.query(`DELETE FROM "Track" WHERE "userId" = $1;`, [userId])
-        for (let i = 0; i < Math.min(tracks.length, 5); i++) {
-          const t = tracks[i]
+        for (let i = 0; i < slicedTracks.length; i++) {
+          const t = slicedTracks[i]
           const playsNum = typeof t.plays === 'number' ? t.plays : (parseInt(String(t.plays).replace(/\D/g, ''), 10) || 50)
+          const rawScLink = typeof t.soundcloudLink === 'string' ? t.soundcloudLink.trim() : ''
+          const assignedScLink = rawScLink || (!hasAnySoundcloudLink && i === 0 && effectiveFallbackScLink ? effectiveFallbackScLink : null)
+
           await client.query(`
             INSERT INTO "Track" (
               id, title, "audioUrl", "soundcloudLink", duration, format, "snippetType", bpm, key, "fileSize", "order", plays, "userId", "createdAt"
@@ -322,7 +384,7 @@ export class PerfilesService {
           `, [
             (t.title || `Demo 0${i + 1}`).trim(),
             t.audioUrl || null,
-            t.soundcloudLink || null,
+            assignedScLink,
             t.duration || '0:30',
             t.format || 'MP3',
             t.snippetType || `0${i + 1} - DEMO EXCLUSIVA`,
@@ -334,17 +396,17 @@ export class PerfilesService {
             userId,
           ])
         }
-      } else if (typeof trackUrl === 'string' && trackUrl.trim()) {
-        const existT = await client.query(`SELECT id FROM "Track" WHERE "userId" = $1 LIMIT 1;`, [userId])
+      } else if (effectiveFallbackScLink) {
+        const existT = await client.query(`SELECT id FROM "Track" WHERE "userId" = $1 ORDER BY "order" ASC LIMIT 1;`, [userId])
         if (existT.rows.length > 0) {
           await client.query(`
-            UPDATE "Track" SET "soundcloudLink" = $1, title = $2 WHERE id = $3;
-          `, [trackUrl.trim(), `${nickname || user.nickname || 'Usuario'} - Track Destacado`, existT.rows[0].id])
+            UPDATE "Track" SET "soundcloudLink" = $1 WHERE id = $2;
+          `, [effectiveFallbackScLink, existT.rows[0].id])
         } else {
           await client.query(`
             INSERT INTO "Track" (id, title, duration, plays, "soundcloudLink", "userId", "order", "createdAt")
             VALUES (gen_random_uuid(), $1, '0:30', 50, $2, $3, 0, CURRENT_TIMESTAMP);
-          `, [`${nickname || user.nickname || 'Usuario'} - Track Destacado`, trackUrl.trim(), userId])
+          `, [`${nickname || user.nickname || 'Usuario'} - Track Destacado`, effectiveFallbackScLink, userId])
         }
       }
 
@@ -380,8 +442,9 @@ export class PerfilesService {
       params.push(currentUserId)
     }
 
-    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir al menos una pista de SoundCloud vinculada en la entidad Track
+    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir cuenta activa y al menos una pista de SoundCloud vinculada en la entidad Track
     if (!includeAll && currentUserRole !== 'Administrador') {
+      conditions.push(`(s.name IS NULL OR s.name NOT IN ('Suspended', 'Banned', 'Inactive'))`)
       conditions.push(`EXISTS (
         SELECT 1 FROM "Track" t 
         WHERE t."userId" = u.id 

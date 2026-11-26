@@ -70,6 +70,9 @@ export class BusquedaService {
       pIdx++
     }
 
+    // Excluir cuentas suspendidas, baneadas o inactivas
+    conditions.push(`(s.name IS NULL OR s.name NOT IN ('Suspended', 'Banned', 'Inactive'))`)
+
     // RF-01 / RF-02: Exigir al menos una pista de SoundCloud vinculada en Track para visibilidad en matching
     conditions.push(`EXISTS (
       SELECT 1 FROM "Track" t 
@@ -103,6 +106,7 @@ export class BusquedaService {
         ST_X(l.geo_point::geometry) AS longitude,
         ${distanceSelect}
       FROM "User" u
+      LEFT JOIN "UserStatus" s ON u."statusId" = s.id
       LEFT JOIN "Location" l ON u."locationId" = l.id
       ${whereClause}
       ORDER BY 
@@ -116,23 +120,57 @@ export class BusquedaService {
     const userIds = result.rows.map((r: any) => r.id)
 
     const genresMap = new Map<string, string[]>()
+    const tracksMap = new Map<string, any[]>()
     if (userIds.length > 0) {
-      const genresRes = await query(`
-        SELECT pg."userId", g.name
-        FROM "ProfileGenre" pg
-        JOIN "Genre" g ON pg."genreId" = g.id
-        WHERE pg."userId" = ANY($1::uuid[]);
-      `, [userIds])
+      const [genresRes, tracksRes] = await Promise.all([
+        query(`
+          SELECT pg."userId", g.name
+          FROM "ProfileGenre" pg
+          JOIN "Genre" g ON pg."genreId" = g.id
+          WHERE pg."userId" = ANY($1::uuid[]);
+        `, [userIds]),
+        query(`
+          SELECT
+            t.id, t.title, t.plays, t.duration, t."audioUrl", t."soundcloudLink",
+            t.format, t."snippetType", t.bpm, t.key, t."fileSize", t."order", t."userId",
+            g.name AS genre_name
+          FROM "Track" t
+          LEFT JOIN "TrackGenre" tg ON tg."trackId" = t.id
+          LEFT JOIN "Genre" g ON tg."genreId" = g.id
+          WHERE t."userId" = ANY($1::uuid[])
+          ORDER BY t."userId", t."order" ASC;
+        `, [userIds]),
+      ])
 
       for (const row of genresRes.rows) {
         if (!genresMap.has(row.userId)) genresMap.set(row.userId, [])
         genresMap.get(row.userId)!.push(row.name)
+      }
+
+      for (const row of tracksRes.rows) {
+        if (!tracksMap.has(row.userId)) tracksMap.set(row.userId, [])
+        tracksMap.get(row.userId)!.push({
+          id: row.id,
+          title: row.title || 'Track Destacado',
+          plays: typeof row.plays === 'number' ? `${row.plays.toLocaleString()} reproducciones` : String(row.plays || '0'),
+          duration: row.duration || '0:30',
+          genre: row.genre_name || 'Destacado',
+          audioUrl: row.audioUrl || '',
+          soundcloudLink: row.soundcloudLink || '',
+          format: row.format || 'MP3',
+          snippetType: row.snippetType || 'Snippet Demo',
+          bpm: row.bpm || '',
+          key: row.key || '',
+          fileSize: row.fileSize || '',
+          order: typeof row.order === 'number' ? row.order : 0,
+        })
       }
     }
 
     return result.rows.map((u: any) => ({
       ...u,
       interestGenres: genresMap.get(u.id) || [],
+      tracks: tracksMap.get(u.id) || [],
     }))
   }
 }

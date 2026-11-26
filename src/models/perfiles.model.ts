@@ -69,6 +69,7 @@ export interface PerfilResponse {
 }
 
 export interface UpdateProfileDTO {
+  email?: string
   firstName?: string
   lastName?: string
   nickname?: string

@@ -115,14 +115,17 @@ export class AuthService {
 
       // 1. Crear Location normalizada con geo_point
       const formattedAddress = String(location || [streetAddress, city, province, country].filter(Boolean).join(', ') || 'Sin especificar').trim()
-      const latVal = latitude != null && latitude !== '' ? parseFloat(String(latitude)) : null
-      const lonVal = longitude != null && longitude !== '' ? parseFloat(String(longitude)) : null
+      const parsedLat = latitude != null && latitude !== '' ? Number(latitude) : NaN
+      const parsedLon = longitude != null && longitude !== '' ? Number(longitude) : NaN
+      const latVal = Number.isFinite(parsedLat) ? parsedLat : null
+      const lonVal = Number.isFinite(parsedLon) ? parsedLon : null
 
       const locInsert = await client.query(`
-        INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", geo_point, srid, "createdAt", "updatedAt")
+        INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", latitude, longitude, geo_point, srid, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(), $1, $2, $3, $4, $5,
-          CASE WHEN $6::numeric IS NOT NULL AND $7::numeric IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7, $6), 4326)::geography ELSE NULL END,
+          $6::double precision, $7::double precision,
+          CASE WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
           4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         RETURNING id;
@@ -209,12 +212,23 @@ export class AuthService {
         `, [newUser.id, gId])
       }
 
-      // 6. Tracks
-      const incomingTracks = Array.isArray(tracks) ? tracks : []
+      // 6. Tracks (garantizar persistencia de soundcloudLink en Track cuando el perfil tiene SoundCloud)
+      const incomingTracks = Array.isArray(tracks) ? tracks.slice(0, 5) : []
+      const fallbackScUrl =
+        (typeof data.trackUrl === 'string' && data.trackUrl.trim() ? data.trackUrl.trim() : '') ||
+        (typeof soundcloudUrl === 'string' && soundcloudUrl.trim() ? soundcloudUrl.trim() : '')
+
       if (incomingTracks.length > 0) {
-        for (let i = 0; i < Math.min(incomingTracks.length, 5); i++) {
+        const hasAnyScLink = incomingTracks.some(
+          (t: any) => typeof t?.soundcloudLink === 'string' && t.soundcloudLink.trim().length > 0
+        )
+
+        for (let i = 0; i < incomingTracks.length; i++) {
           const t = incomingTracks[i]
           const playsNum = typeof t.plays === 'number' ? t.plays : (parseInt(String(t.plays).replace(/\D/g, ''), 10) || 50)
+          const rawScLink = typeof t.soundcloudLink === 'string' ? t.soundcloudLink.trim() : ''
+          const assignedScLink = rawScLink || (!hasAnyScLink && i === 0 && fallbackScUrl ? fallbackScUrl : null)
+
           await client.query(`
             INSERT INTO "Track" (
               id, title, "audioUrl", "soundcloudLink", duration, format, "snippetType", bpm, key, "fileSize", "order", plays, "userId", "createdAt"
@@ -223,7 +237,7 @@ export class AuthService {
           `, [
             (t.title || `Demo 0${i + 1}`).trim(),
             t.audioUrl || null,
-            t.soundcloudLink || null,
+            assignedScLink,
             t.duration || '0:30',
             t.format || 'MP3',
             t.snippetType || `0${i + 1} - DEMO EXCLUSIVA`,
@@ -235,6 +249,11 @@ export class AuthService {
             newUser.id,
           ])
         }
+      } else if (fallbackScUrl) {
+        await client.query(`
+          INSERT INTO "Track" (id, title, duration, plays, "soundcloudLink", "userId", "order", "createdAt")
+          VALUES (gen_random_uuid(), $1, '0:30', 50, $2, $3, 0, CURRENT_TIMESTAMP);
+        `, [`${nickname.trim()} - Track Destacado`, fallbackScUrl, newUser.id])
       }
 
       await client.query('COMMIT')

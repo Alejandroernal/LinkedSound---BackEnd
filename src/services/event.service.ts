@@ -273,10 +273,11 @@ export class EventService {
       const lonVal = longitude != null && !isNaN(parseFloat(longitude)) ? parseFloat(longitude) : null
 
       const locRes = await client.query(`
-        INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", geo_point, srid, "createdAt", "updatedAt")
+        INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", latitude, longitude, geo_point, srid, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(), $1, $2, $3, $4, $5,
-          CASE WHEN $6::numeric IS NOT NULL AND $7::numeric IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
+          $6::double precision, $7::double precision,
+          CASE WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
           4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         RETURNING id;
@@ -386,7 +387,15 @@ export class EventService {
         ...createdEvent,
         images: processedImages,
         interestGenres: Array.isArray(interestGenres) ? interestGenres : [],
-        location: { formattedAddress },
+        location: {
+          formattedAddress,
+          country: country ? String(country).trim() : '',
+          province: province ? String(province).trim() : '',
+          city: city ? String(city).trim() : '',
+          streetAddress: streetAddress ? String(streetAddress).trim() : '',
+          latitude: latVal,
+          longitude: lonVal,
+        },
       })
     } catch (err) {
       await client.query('ROLLBACK')
@@ -415,6 +424,9 @@ export class EventService {
     const {
       title,
       nickname,
+      role,
+      eventDate,
+      eventTime,
       venue,
       ticketUrl,
       description,
@@ -422,12 +434,111 @@ export class EventService {
       spotifyUrl,
       images,
       profileImage,
+      location,
+      country,
+      province,
+      city,
+      streetAddress,
+      latitude,
+      longitude,
+      interestGenres,
     } = data
+
+    // Procesar imagenes si vienen en base64 antes de abrir la transaccion
+    const rawImages: string[] | null = Array.isArray(images) && images.length > 0
+      ? images.filter((img: any) => typeof img === 'string' && img.trim())
+      : (profileImage && typeof profileImage === 'string' && profileImage.trim() ? [profileImage.trim()] : null)
+
+    let processedImages: string[] | null = null
+    if (rawImages && rawImages.length > 0) {
+      processedImages = []
+      for (const imgItem of rawImages.slice(0, 5)) {
+        const trimmed = imgItem.trim()
+        if (trimmed.startsWith('data:image/')) {
+          const uploaded = await uploadBase64ToCloudinary(trimmed, 'linkedsound/events')
+          if (uploaded) processedImages.push(uploaded)
+        } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          processedImages.push(trimmed)
+        }
+      }
+    }
 
     const client = await getClient()
 
     try {
       await client.query('BEGIN')
+
+      // 1. Actualizar o crear Location con PostGIS geo_point
+      const hasLocationUpdate =
+        location !== undefined ||
+        country !== undefined ||
+        province !== undefined ||
+        city !== undefined ||
+        streetAddress !== undefined ||
+        latitude !== undefined ||
+        longitude !== undefined
+
+      let updatedLocationId: string | null = existing.locationId || null
+
+      if (hasLocationUpdate) {
+        const parsedLat = latitude != null && latitude !== '' ? Number(latitude) : NaN
+        const parsedLon = longitude != null && longitude !== '' ? Number(longitude) : NaN
+        const latVal = Number.isFinite(parsedLat) ? parsedLat : null
+        const lonVal = Number.isFinite(parsedLon) ? parsedLon : null
+
+        if (existing.locationId) {
+          await client.query(`
+            UPDATE "Location"
+            SET "formattedAddress" = COALESCE($1, "formattedAddress"),
+                country = COALESCE($2, country),
+                province = COALESCE($3, province),
+                city = COALESCE($4, city),
+                "streetAddress" = COALESCE($5, "streetAddress"),
+                latitude = COALESCE($6::double precision, latitude),
+                longitude = COALESCE($7::double precision, longitude),
+                geo_point = CASE
+                  WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL
+                  THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography
+                  ELSE geo_point
+                END,
+                srid = 4326,
+                "updatedAt" = CURRENT_TIMESTAMP
+            WHERE id = $8;
+          `, [
+            location ? String(location).trim() : null,
+            country !== undefined ? (country ? String(country).trim() : null) : null,
+            province !== undefined ? (province ? String(province).trim() : null) : null,
+            city !== undefined ? (city ? String(city).trim() : null) : null,
+            streetAddress !== undefined ? (streetAddress ? String(streetAddress).trim() : null) : null,
+            latVal,
+            lonVal,
+            existing.locationId,
+          ])
+        } else {
+          const formattedAddress = String(
+            location || [streetAddress, city, province, country].filter(Boolean).join(', ') || 'Sin especificar'
+          ).trim()
+          const locRes = await client.query(`
+            INSERT INTO "Location" (id, "formattedAddress", country, province, city, "streetAddress", latitude, longitude, geo_point, srid, "createdAt", "updatedAt")
+            VALUES (
+              gen_random_uuid(), $1, $2, $3, $4, $5,
+              $6::double precision, $7::double precision,
+              CASE WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography ELSE NULL END,
+              4326, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING id;
+          `, [
+            formattedAddress,
+            country ? String(country).trim() : null,
+            province ? String(province).trim() : null,
+            city ? String(city).trim() : null,
+            streetAddress ? String(streetAddress).trim() : null,
+            latVal,
+            lonVal,
+          ])
+          updatedLocationId = locRes.rows[0].id
+        }
+      }
 
       const updates: string[] = ['"updatedAt" = CURRENT_TIMESTAMP']
       const vals: any[] = [id]
@@ -440,6 +551,24 @@ export class EventService {
       if (nickname) {
         updates.push(`nickname = $${pIdx++}`)
         vals.push(String(nickname).trim().slice(0, 100))
+      }
+      if (role) {
+        const etRes = await client.query(`
+          INSERT INTO "EventType" (id, name, "createdAt")
+          VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
+          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+          RETURNING id;
+        `, [String(role).trim()])
+        updates.push(`"eventTypeId" = $${pIdx++}`)
+        vals.push(etRes.rows[0].id)
+      }
+      if (eventDate) {
+        updates.push(`"eventDate" = $${pIdx++}`)
+        vals.push(String(eventDate).trim())
+      }
+      if (eventTime !== undefined) {
+        updates.push(`"eventTime" = $${pIdx++}`)
+        vals.push((eventTime ? String(eventTime).trim() : '22:00').slice(0, 8))
       }
       if (venue !== undefined) {
         updates.push(`venue = $${pIdx++}`)
@@ -461,6 +590,14 @@ export class EventService {
         updates.push(`"spotifyUrl" = $${pIdx++}`)
         vals.push(spotifyUrl ? String(spotifyUrl).trim() : null)
       }
+      if (updatedLocationId && updatedLocationId !== existing.locationId) {
+        updates.push(`"locationId" = $${pIdx++}`)
+        vals.push(updatedLocationId)
+      }
+      if (processedImages && processedImages.length > 0) {
+        updates.push(`"profileImage" = $${pIdx++}`)
+        vals.push(processedImages[0])
+      }
       if (data.status) {
         const sRes = await client.query(`
           INSERT INTO "EventStatus" (id, name, "createdAt")
@@ -478,15 +615,11 @@ export class EventService {
         WHERE id = $1;
       `, vals)
 
-      // Actualizar imágenes si se enviaron
-      const rawImages: string[] | null = Array.isArray(images) && images.length > 0
-        ? images
-        : (profileImage ? [profileImage] : null)
-
-      if (rawImages && rawImages.length > 0) {
+      // Actualizar imagenes si se enviaron
+      if (processedImages && processedImages.length > 0) {
         await client.query(`DELETE FROM "EventImage" WHERE "eventId" = $1;`, [id])
-        for (let i = 0; i < Math.min(rawImages.length, 5); i++) {
-          const imgUrl = rawImages[i]
+        for (let i = 0; i < processedImages.length; i++) {
+          const imgUrl = processedImages[i]
           const imgRes = await client.query(`
             INSERT INTO "Image" (id, url, "createdAt")
             VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
@@ -494,21 +627,64 @@ export class EventService {
           `, [imgUrl])
           await client.query(`
             INSERT INTO "EventImage" ("eventId", "imageId", "isCover", "order", "createdAt")
-            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP);
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT ("eventId", "imageId") DO NOTHING;
           `, [id, imgRes.rows[0].id, i === 0, i])
         }
       }
 
+      // Actualizar generos si se enviaron
+      if (Array.isArray(interestGenres)) {
+        await client.query(`DELETE FROM "EventGenre" WHERE "eventId" = $1;`, [id])
+        for (const gName of interestGenres) {
+          const trimmed = String(gName).trim()
+          if (!trimmed) continue
+          const gRes = await client.query(`
+            INSERT INTO "Genre" (id, name, slug, "createdAt")
+            VALUES (gen_random_uuid(), $1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id;
+          `, [trimmed, toSlug(trimmed)])
+          await client.query(`
+            INSERT INTO "EventGenre" ("eventId", "genreId", "createdAt")
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT ("eventId", "genreId") DO NOTHING;
+          `, [id, gRes.rows[0].id])
+        }
+      }
+
       await client.query('COMMIT')
-      const updated = await query(`
-        SELECT e.*, es.name AS status_name, l."formattedAddress",
-               ST_Y(l.geo_point::geometry) AS latitude, ST_X(l.geo_point::geometry) AS longitude
-        FROM "Event" e
-        LEFT JOIN "EventStatus" es ON e."statusId" = es.id
-        LEFT JOIN "Location" l ON e."locationId" = l.id
-        WHERE e.id = $1;
-      `, [id])
-      return formatEventResponse(updated.rows[0])
+      const [updated, imgRes, genresRes] = await Promise.all([
+        query(`
+          SELECT e.*, et.name AS event_type_name, es.name AS status_name,
+                 l."formattedAddress", l.country, l.province, l.city, l."streetAddress",
+                 ST_Y(l.geo_point::geometry) AS latitude, ST_X(l.geo_point::geometry) AS longitude
+          FROM "Event" e
+          LEFT JOIN "EventType" et ON e."eventTypeId" = et.id
+          LEFT JOIN "EventStatus" es ON e."statusId" = es.id
+          LEFT JOIN "Location" l ON e."locationId" = l.id
+          WHERE e.id = $1;
+        `, [id]),
+        query(`
+          SELECT i.url
+          FROM "EventImage" ei
+          JOIN "Image" i ON ei."imageId" = i.id
+          WHERE ei."eventId" = $1
+          ORDER BY ei."isCover" DESC, ei."order" ASC;
+        `, [id]),
+        query(`
+          SELECT g.name
+          FROM "EventGenre" eg
+          JOIN "Genre" g ON eg."genreId" = g.id
+          WHERE eg."eventId" = $1;
+        `, [id]),
+      ])
+      const evRow = updated.rows[0]
+      return formatEventResponse({
+        ...evRow,
+        images: imgRes.rows.map((r: any) => r.url),
+        genres: genresRes.rows.map((r: any) => r.name),
+      })
     } catch (err) {
       await client.query('ROLLBACK')
       throw err

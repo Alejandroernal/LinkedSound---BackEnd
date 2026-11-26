@@ -36,8 +36,13 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response) =>
     })
   } catch (error: any) {
     console.error('Error al actualizar perfil:', error)
-    const isValidation = error.message.includes('maximo') || error.message.includes('valida')
-    const statusCode = error.statusCode || (isValidation ? 400 : 500)
+    const isValidation =
+      error.message.includes('maximo') ||
+      error.message.includes('valida') ||
+      error.message.includes('valido') ||
+      error.message.includes('obligatorio')
+    const isConflict = error.message.includes('ya esta')
+    const statusCode = error.statusCode || (isConflict ? 409 : isValidation ? 400 : 500)
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Error al actualizar el perfil',
@@ -59,7 +64,8 @@ export const getGenres = async (_req: Request, res: Response) => {
 export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const currentUserId = req.user?.userId
-    const currentUserRole = req.user?.role
+    const currentUserRole =
+      req.user?.accountRole === 'Administrador' ? 'Administrador' : req.user?.role
     const includeAll = req.query.all === 'true'
 
     const users = await perfilesService.getUsers(currentUserId, currentUserRole, includeAll)
