@@ -84,4 +84,27 @@ describe('Middleware de Autorizacion por Rol (authorizeRole)', () => {
     assert.strictEqual(res.jsonBody?.success, false)
     assert.ok(res.jsonBody?.message.includes('Acceso denegado'))
   })
+
+  it('debe rechazar con 403 si role intenta suplantar Administrador pero accountRole es Usuario', () => {
+    const req: AuthenticatedRequest = {
+      user: {
+        userId: 'spoof-id',
+        email: 'spoof@linkedsound.com',
+        role: 'Administrador',
+        accountRole: 'Usuario',
+      },
+    } as any
+
+    const res = createMockResponse()
+    let calledNext = false
+    const next = () => {
+      calledNext = true
+    }
+
+    const middleware = authorizeRole('Administrador')
+    middleware(req, res, next)
+
+    assert.strictEqual(calledNext, false)
+    assert.strictEqual(res.statusCode, 403)
+  })
 })

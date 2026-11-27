@@ -11,7 +11,7 @@ import {
   verifyResetCode,
   resetPassword,
 } from '../controllers/auth.controller.js'
-import { authenticate, optionalAuthenticate } from '../middlewares/auth.middleware.js'
+import { authenticate } from '../middlewares/auth.middleware.js'
 
 export const authRouter = Router()
 
@@ -24,4 +24,4 @@ authRouter.get('/me', authenticate, getMe)
 authRouter.put('/profile', authenticate, updateProfile)
 authRouter.put('/change-password', authenticate, changePassword)
 authRouter.get('/genres', getGenres)
-authRouter.get('/users', optionalAuthenticate, getUsers)
+authRouter.get('/users', authenticate, getUsers)

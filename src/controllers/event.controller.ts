@@ -5,7 +5,7 @@ export { formatEventResponse }
 
 export const getEvents = async (req: Request, res: Response) => {
   try {
-    const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
+    const currentUserRole = (req as any).user?.accountRole === 'Administrador' ? 'Administrador' : (req as any).user?.role
     const onlyActive = req.query.onlyActive === 'true' || req.query.status === 'Active'
     const events = await eventService.getAllEvents(currentUserRole, onlyActive)
     return res.status(200).json({
@@ -52,7 +52,7 @@ export const updateEvent = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id)
     const currentUserId = (req as any).user?.userId || (req as any).user?.id
-    const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
+    const currentUserRole = (req as any).user?.accountRole === 'Administrador' ? 'Administrador' : (req as any).user?.role
 
     const updated = await eventService.updateEvent(id, currentUserId, currentUserRole, req.body)
     return res.status(200).json({
@@ -64,7 +64,7 @@ export const updateEvent = async (req: Request, res: Response) => {
     console.error('Error al actualizar evento:', error)
     const isNotFound = error.message.includes('no encontrado')
     const isForbidden = error.message.includes('permisos')
-    const statusCode = isNotFound ? 404 : isForbidden ? 403 : 500
+    const statusCode = error.statusCode || (isNotFound ? 404 : isForbidden ? 403 : 500)
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Error al actualizar el evento.',
@@ -77,7 +77,7 @@ export const deleteEvent = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id)
     const currentUserId = (req as any).user?.userId || (req as any).user?.id
-    const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
+    const currentUserRole = (req as any).user?.accountRole === 'Administrador' ? 'Administrador' : (req as any).user?.role
 
     const result = await eventService.deleteEvent(id, currentUserId, currentUserRole)
     return res.status(200).json({
@@ -127,7 +127,7 @@ export const deleteEventComment = async (req: Request, res: Response) => {
   try {
     const commentId = String(req.params.commentId)
     const currentUserId = (req as any).user?.userId || (req as any).user?.id
-    const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
+    const currentUserRole = (req as any).user?.accountRole === 'Administrador' ? 'Administrador' : (req as any).user?.role
 
     if (!currentUserId) {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado.' })

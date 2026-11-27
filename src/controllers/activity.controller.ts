@@ -21,7 +21,7 @@ export const getActivities = async (_req: Request, res: Response) => {
 export const createActivity = async (req: Request, res: Response) => {
   try {
     const { action, module = 'Sistema' } = req.body
-    const userId = (req as any).user?.userId || (req as any).user?.id || req.body.userId
+    const userId = (req as any).user?.userId || (req as any).user?.id
 
     const activity = await activityService.logActivity({
       userId,

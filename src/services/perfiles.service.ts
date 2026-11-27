@@ -51,6 +51,22 @@ export const formatUserResponse = (user: any): PerfilResponse | null => {
   }
 }
 
+export const sanitizePublicProfile = (profile: any) => {
+  if (!profile) return null
+  const {
+    email: _email,
+    reportsCount: _reportsCount,
+    status: _status,
+    status_name: _statusName,
+    statusId: _statusId,
+    accountRole: _accountRole,
+    fcmToken: _fcmToken,
+    streetAddress: _streetAddress,
+    ...publicData
+  } = profile
+  return publicData
+}
+
 export class PerfilesService {
   /**
    * Obtiene el perfil completo de un usuario con sus relaciones (roles, géneros, tracks).
@@ -168,6 +184,12 @@ export class PerfilesService {
       throw new Error('El enlace de Spotify debe ser una URL valida de Spotify (debe contener spotify.com)')
     }
 
+    if (accountRole !== undefined && String(accountRole).trim() !== '' && String(accountRole).trim() !== (user.accountRole || 'Usuario')) {
+      const err = new Error('No tienes permisos para modificar el rol de cuenta.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+
     if (password !== undefined && typeof password === 'string' && password.trim().length > 0) {
       assertValidPassword(password)
       const err = new Error('El cambio de contrasena debe realizarse desde la opcion dedicada Cambiar contrasena.')
@@ -268,10 +290,6 @@ export class PerfilesService {
       if (nickname) {
         updateFields.push(`nickname = $${pIdx++}`)
         updateVals.push(String(nickname).trim())
-      }
-      if (accountRole && ['Usuario', 'Administrador'].includes(accountRole)) {
-        updateFields.push(`"accountRole" = $${pIdx++}`)
-        updateVals.push(accountRole)
       }
       if (description !== undefined) {
         updateFields.push(`description = $${pIdx++}`)
@@ -407,7 +425,9 @@ export class PerfilesService {
    * Listado de usuarios para Discovery y Explorer con filtros de exclusión propia.
    */
   async getUsers(currentUserId?: string, currentUserRole?: string, includeAll?: boolean) {
-    const shouldExcludeSelf = currentUserId && !includeAll && currentUserRole !== 'Administrador'
+    const isAdmin = currentUserRole === 'Administrador'
+    const effectiveIncludeAll = isAdmin && Boolean(includeAll)
+    const shouldExcludeSelf = currentUserId && !effectiveIncludeAll && !isAdmin
     const conditions: string[] = []
     const params: any[] = []
     let pIdx = 1
@@ -417,8 +437,9 @@ export class PerfilesService {
       params.push(currentUserId)
     }
 
-    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir cuenta activa y al menos una pista de SoundCloud vinculada en la entidad Track
-    if (!includeAll && currentUserRole !== 'Administrador') {
+    // RF-01 / RF-02: Para Discovery/Matching ordinario, exigir cuenta activa no administrativa y al menos una pista de SoundCloud vinculada en la entidad Track
+    if (!effectiveIncludeAll && !isAdmin) {
+      conditions.push(`(u."accountRole" IS NULL OR u."accountRole" <> 'Administrador')`)
       conditions.push(`(s.name IS NULL OR s.name NOT IN ('Suspended', 'Banned', 'Inactive'))`)
       conditions.push(`EXISTS (
         SELECT 1 FROM "Track" t 
@@ -494,7 +515,8 @@ export class PerfilesService {
         genres: genresByUser.get(u.id) || [],
         tracks: tracksByUser.get(u.id) || [],
       }
-      return formatUserResponse(userPayload)
+      const formatted = formatUserResponse(userPayload)
+      return isAdmin ? formatted : sanitizePublicProfile(formatted)
     })
   }
 

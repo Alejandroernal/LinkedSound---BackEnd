@@ -56,7 +56,7 @@ export class AuthService {
       lastName,
       nickname,
       role = 'Artista',
-      accountRole = 'Usuario',
+      accountRole,
       location,
       country,
       province,
@@ -71,6 +71,23 @@ export class AuthService {
       profileImage,
       tracks = [],
     } = data
+
+    // Bloquear cualquier intento de escalada de privilegios en el registro publico
+    if (accountRole !== undefined && String(accountRole).trim() !== '' && String(accountRole).trim() !== 'Usuario') {
+      const err = new Error('No esta permitido registrarse con privilegios de administrador.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+
+    const ALLOWED_PUBLIC_ROLES = ['Artista', 'Productor', 'Productor y Artista']
+    const rawRole = typeof role === 'string' ? role.trim() : 'Artista'
+    if (['administrador', 'admin'].includes(rawRole.toLowerCase())) {
+      const err = new Error('No esta permitido asignarse el rol de administrador en el registro.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+    const safeRole = ALLOWED_PUBLIC_ROLES.includes(rawRole) ? rawRole : 'Artista'
+    const safeAccountRole = 'Usuario'
 
     if (!email || !password || !firstName || !lastName || !nickname) {
       const err = new Error('Faltan campos obligatorios para el registro')
@@ -176,7 +193,7 @@ export class AuthService {
         firstName.trim(),
         lastName.trim(),
         nickname.trim(),
-        ['Usuario', 'Administrador'].includes(accountRole) ? accountRole : 'Usuario',
+        safeAccountRole,
         profileImage || null,
         description ? description.trim() : null,
         soundcloudUrl ? soundcloudUrl.trim() : null,
@@ -186,8 +203,8 @@ export class AuthService {
       ])
       const newUser = userInsert.rows[0]
 
-      // 4. Asignar rol en UserRole
-      const rolesToAssign = role === 'Productor y Artista' ? ['Productor', 'Artista'] : [role || 'Artista']
+      // 4. Asignar rol en UserRole (estrictamente limitado a roles musicales publicos)
+      const rolesToAssign = safeRole === 'Productor y Artista' ? ['Productor', 'Artista'] : [safeRole]
       for (const rName of rolesToAssign) {
         const roleRes = await client.query(`SELECT id FROM "Role" WHERE name = $1 LIMIT 1;`, [rName])
         if (roleRes.rows.length > 0) {
@@ -272,8 +289,8 @@ export class AuthService {
       const token = generateToken({
         userId: newUser.id,
         email: email.trim().toLowerCase(),
-        role: role || 'Artista',
-        accountRole: accountRole || 'Usuario',
+        role: safeRole,
+        accountRole: safeAccountRole,
       })
 
       return {

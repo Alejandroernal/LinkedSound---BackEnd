@@ -114,4 +114,42 @@ describe('Modulo de Autenticacion y Seguridad (Password y JWT)', () => {
       }
     )
   })
+
+  it('debe bloquear intentos de escalada a Administrador durante el registro', async () => {
+    const { authService } = await import('../services/auth.service.js')
+
+    await assert.rejects(
+      async () => {
+        await authService.register({
+          email: 'escalate1@linkedsound.test',
+          password: 'Password123',
+          firstName: 'Test',
+          lastName: 'Admin',
+          nickname: 'escalate_acc_role',
+          accountRole: 'Administrador',
+        })
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 403)
+        return true
+      }
+    )
+
+    await assert.rejects(
+      async () => {
+        await authService.register({
+          email: 'escalate2@linkedsound.test',
+          password: 'Password123',
+          firstName: 'Test',
+          lastName: 'Admin',
+          nickname: 'escalate_func_role',
+          role: 'Administrador',
+        })
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 403)
+        return true
+      }
+    )
+  })
 })

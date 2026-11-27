@@ -430,10 +430,27 @@ export class EventService {
     }
     const existing = eventRes.rows[0]
 
-    // Autorización
+    // Autorizacion
     const isAdmin = currentUserRole === 'Administrador'
     if (currentUserId && existing.ownerId !== currentUserId && !isAdmin) {
-      throw new Error('No tienes permisos para modificar este evento.')
+      const err = new Error('No tienes permisos para modificar este evento.')
+      ;(err as any).statusCode = 403
+      throw err
+    }
+
+    // Bloquear bypass de moderacion: solo un administrador puede modificar el estado del evento
+    if (data.status !== undefined && String(data.status).trim() !== '') {
+      if (!isAdmin) {
+        const err = new Error('No tienes permisos para modificar el estado del evento. Solo un administrador puede moderarlo.')
+        ;(err as any).statusCode = 403
+        throw err
+      }
+      const trimmedStatus = String(data.status).trim()
+      if (!['Active', 'Hidden', 'Under Review', 'Finished'].includes(trimmedStatus)) {
+        const err = new Error('Estado de evento invalido. Debe ser Active, Hidden, Under Review o Finished.')
+        ;(err as any).statusCode = 400
+        throw err
+      }
     }
 
     const {
@@ -613,7 +630,7 @@ export class EventService {
         updates.push(`"profileImage" = $${pIdx++}`)
         vals.push(processedImages[0])
       }
-      if (data.status) {
+      if (isAdmin && data.status) {
         const sRes = await client.query(`
           INSERT INTO "EventStatus" (id, name, "createdAt")
           VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
