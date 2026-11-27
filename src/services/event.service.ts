@@ -67,11 +67,18 @@ export class EventService {
   /**
    * Obtiene todos los eventos con sus imagenes, generos, comentarios y organizador.
    * Para usuarios no administradores (o cuando onlyActive=true, como en Explorer),
-   * solo devuelve eventos en estado 'Active' (ocultando 'Under Review', 'Hidden', etc.).
+   * solo devuelve eventos vigentes en estado 'Active' (excluyendo pasados, 'Under Review' y 'Hidden'),
+   * ordenados cronologicamente del mas proximo al mas lejano.
    */
   async getAllEvents(currentUserRole?: string, onlyActive?: boolean) {
     const isRegularUser = currentUserRole !== 'Administrador'
-    const whereClause = isRegularUser || onlyActive ? "WHERE es.name = 'Active'" : ''
+    const onlyUpcomingActive = isRegularUser || onlyActive
+    const whereClause = onlyUpcomingActive
+      ? "WHERE es.name = 'Active' AND e.\"eventDate\"::date >= CURRENT_DATE"
+      : ''
+    const orderClause = onlyUpcomingActive
+      ? 'ORDER BY e."eventDate" ASC, e."eventTime" ASC, e."createdAt" DESC'
+      : 'ORDER BY e."createdAt" DESC'
 
     const sql = `
       SELECT 
@@ -92,7 +99,7 @@ export class EventService {
       LEFT JOIN "Location" l ON e."locationId" = l.id
       LEFT JOIN "User" u ON e."ownerId" = u.id
       ${whereClause}
-      ORDER BY e."createdAt" DESC;
+      ${orderClause};
     `
     const { rows: events } = await query(sql)
 
