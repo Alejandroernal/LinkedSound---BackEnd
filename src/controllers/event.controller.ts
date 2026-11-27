@@ -6,7 +6,8 @@ export { formatEventResponse }
 export const getEvents = async (req: Request, res: Response) => {
   try {
     const currentUserRole = (req as any).user?.accountRole || (req as any).user?.role
-    const events = await eventService.getAllEvents(currentUserRole)
+    const onlyActive = req.query.onlyActive === 'true' || req.query.status === 'Active'
+    const events = await eventService.getAllEvents(currentUserRole, onlyActive)
     return res.status(200).json({
       success: true,
       events,
@@ -28,7 +29,7 @@ export const createEvent = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Evento creado exitosamente',
+      message: 'Evento creado exitosamente y enviado a revision para aprobacion administrativa.',
       event: newEvent,
     })
   } catch (error: any) {

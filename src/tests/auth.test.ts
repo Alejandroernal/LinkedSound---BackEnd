@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
-import { hashPassword, comparePassword } from '../utils/password.js'
+import { hashPassword, comparePassword, validatePasswordStrength } from '../utils/password.js'
 import { generateToken, verifyToken } from '../utils/jwt.js'
 
 describe('Modulo de Autenticacion y Seguridad (Password y JWT)', () => {
@@ -68,6 +68,44 @@ describe('Modulo de Autenticacion y Seguridad (Password y JWT)', () => {
     await assert.rejects(
       async () => {
         await authService.resetPassword('test@linkedsound.test', '123456', 'corta')
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 400)
+        assert.ok(err.message.includes('8 caracteres'))
+        return true
+      }
+    )
+  })
+
+  it('debe aplicar las mismas reglas de complejidad de contrasena en util, registro y cambio desde perfil', async () => {
+    assert.ok(validatePasswordStrength('Abc123')?.includes('8 caracteres'))
+    assert.ok(validatePasswordStrength('minuscula1')?.includes('mayuscula'))
+    assert.ok(validatePasswordStrength('MAYUSCULA1')?.includes('minuscula'))
+    assert.ok(validatePasswordStrength('SinNumeroA')?.includes('numero'))
+    assert.strictEqual(validatePasswordStrength('Segura123'), null)
+
+    const { authService } = await import('../services/auth.service.js')
+
+    await assert.rejects(
+      async () => {
+        await authService.register({
+          email: 'weak.pass@linkedsound.test',
+          password: 'password123',
+          firstName: 'Test',
+          lastName: 'User',
+          nickname: 'weak_pass_user',
+        })
+      },
+      (err: any) => {
+        assert.strictEqual(err.statusCode, 400)
+        assert.ok(err.message.includes('mayuscula'))
+        return true
+      }
+    )
+
+    await assert.rejects(
+      async () => {
+        await authService.changePassword('00000000-0000-0000-0000-000000000000', 'Actual123', 'debil')
       },
       (err: any) => {
         assert.strictEqual(err.statusCode, 400)

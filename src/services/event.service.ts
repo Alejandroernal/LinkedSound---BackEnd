@@ -65,12 +65,13 @@ export const formatEventResponse = (ev: any) => {
 
 export class EventService {
   /**
-   * Obtiene todos los eventos con sus imágenes, géneros, comentarios y organizador.
-   * Si el usuario no es Administrador, filtra eventos con estado 'Hidden'.
+   * Obtiene todos los eventos con sus imagenes, generos, comentarios y organizador.
+   * Para usuarios no administradores (o cuando onlyActive=true, como en Explorer),
+   * solo devuelve eventos en estado 'Active' (ocultando 'Under Review', 'Hidden', etc.).
    */
-  async getAllEvents(currentUserRole?: string) {
+  async getAllEvents(currentUserRole?: string, onlyActive?: boolean) {
     const isRegularUser = currentUserRole !== 'Administrador'
-    const whereClause = isRegularUser ? "WHERE (es.name IS NULL OR es.name <> 'Hidden')" : ''
+    const whereClause = isRegularUser || onlyActive ? "WHERE es.name = 'Active'" : ''
 
     const sql = `
       SELECT 
@@ -304,9 +305,15 @@ export class EventService {
         eventTypeId = etRes.rows[0].id
       }
 
-      // 3. Status 'Active'
-      const statusRes = await client.query(`SELECT id FROM "EventStatus" WHERE name = 'Active' LIMIT 1;`)
-      const statusId = statusRes.rows.length > 0 ? statusRes.rows[0].id : null
+      // 3. Status inicial 'Under Review' para moderacion administrativa antes de publicarse en Explorer
+      const initialStatusName = 'Under Review'
+      const statusRes = await client.query(`
+        INSERT INTO "EventStatus" (id, name, "createdAt")
+        VALUES (gen_random_uuid(), $1, CURRENT_TIMESTAMP)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id;
+      `, [initialStatusName])
+      const statusId = statusRes.rows[0].id
 
       // 4. Insertar Evento
       const eventInsert = await client.query(`
@@ -379,12 +386,13 @@ export class EventService {
       await client.query(`
         INSERT INTO "UserActivityLog" (id, "userId", action, ip, device, module, "createdAt")
         VALUES (gen_random_uuid(), $1, $2, '127.0.0.1', 'Web Browser', 'Explorer', CURRENT_TIMESTAMP);
-      `, [ownerId, `Creó el evento "${createdEvent.title}" para la fecha ${createdEvent.eventDate}`])
+      `, [ownerId, `Creo el evento "${createdEvent.title}" (En revision) para la fecha ${createdEvent.eventDate}`])
 
       await client.query('COMMIT')
 
       return formatEventResponse({
         ...createdEvent,
+        status_name: initialStatusName,
         images: processedImages,
         interestGenres: Array.isArray(interestGenres) ? interestGenres : [],
         location: {
@@ -706,7 +714,7 @@ export class EventService {
     try {
       await client.query('BEGIN')
 
-      const evRes = await client.query(`SELECT id, title FROM "Event" WHERE id = $1 LIMIT 1;`, [eventId])
+      const evRes = await client.query(`SELECT id, title, "ownerId" FROM "Event" WHERE id = $1 LIMIT 1;`, [eventId])
       if (evRes.rows.length === 0) {
         throw new Error('Evento no encontrado.')
       }
@@ -725,6 +733,17 @@ export class EventService {
         SET "statusId" = $1, "updatedAt" = CURRENT_TIMESTAMP
         WHERE id = $2;
       `, [statusId, eventId])
+
+      if (ev.ownerId && (trimmedStatus === 'Active' || trimmedStatus === 'Hidden')) {
+        const statusMsg =
+          trimmedStatus === 'Active'
+            ? `Tu evento "${ev.title}" fue aprobado y ya es visible en Explorer.`
+            : `Tu evento "${ev.title}" fue ocultado por un administrador.`
+        await client.query(`
+          INSERT INTO "Notification" (id, "userId", title, message, type, "linkPage", "isRead", "createdAt")
+          VALUES (gen_random_uuid(), $1, 'Estado de Evento Actualizado', $2, 'system', 'Explorer', false, CURRENT_TIMESTAMP);
+        `, [ev.ownerId, statusMsg])
+      }
 
       await client.query(`
         INSERT INTO "UserActivityLog" (id, "userId", action, ip, device, module, "createdAt")

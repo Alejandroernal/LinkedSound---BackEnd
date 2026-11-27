@@ -1,5 +1,5 @@
 import { query, getClient } from '../config/db.js'
-import { hashPassword } from '../utils/password.js'
+import { assertValidPassword } from '../utils/password.js'
 import { uploadBase64ToCloudinary } from './upload.service.js'
 import type { UpdateProfileDTO, PerfilResponse } from '../models/perfiles.model.js'
 
@@ -187,9 +187,11 @@ export class PerfilesService {
       throw new Error('El enlace de Spotify debe ser una URL valida de Spotify (debe contener spotify.com)')
     }
 
-    let updatedHashedPassword: string | null = null
-    if (password && typeof password === 'string' && password.trim().length >= 6) {
-      updatedHashedPassword = await hashPassword(password.trim())
+    if (password !== undefined && typeof password === 'string' && password.trim().length > 0) {
+      assertValidPassword(password)
+      const err = new Error('El cambio de contrasena debe realizarse desde la opcion dedicada Cambiar contrasena.')
+      ;(err as any).statusCode = 400
+      throw err
     }
 
     let finalProfileImage: string | null = null
@@ -277,10 +279,6 @@ export class PerfilesService {
       if (normalizedEmail) {
         updateFields.push(`email = $${pIdx++}`)
         updateVals.push(normalizedEmail)
-      }
-      if (updatedHashedPassword) {
-        updateFields.push(`password = $${pIdx++}`)
-        updateVals.push(updatedHashedPassword)
       }
       if (firstName) {
         updateFields.push(`"firstName" = $${pIdx++}`)

@@ -117,3 +117,25 @@ export const resetPassword = async (req: Request, res: Response) => {
     })
   }
 }
+
+export const changePassword = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.userId
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no autenticado',
+      })
+    }
+
+    const { currentPassword, newPassword, confirmPassword } = req.body
+    const result = await authService.changePassword(userId, currentPassword, newPassword, confirmPassword)
+    return res.status(200).json(result)
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error al actualizar la contrasena',
+    })
+  }
+}

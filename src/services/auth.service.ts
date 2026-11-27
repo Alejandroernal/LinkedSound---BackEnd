@@ -1,5 +1,5 @@
 import { query, getClient } from '../config/db.js'
-import { hashPassword, comparePassword } from '../utils/password.js'
+import { hashPassword, comparePassword, assertValidPassword } from '../utils/password.js'
 import { generateToken } from '../utils/jwt.js'
 import { perfilesService, formatUserResponse } from './perfiles.service.js'
 import { emailService } from './email.service.js'
@@ -73,22 +73,28 @@ export class AuthService {
     } = data
 
     if (!email || !password || !firstName || !lastName || !nickname) {
-      throw new Error('Faltan campos obligatorios para el registro')
+      const err = new Error('Faltan campos obligatorios para el registro')
+      ;(err as any).statusCode = 400
+      throw err
     }
 
-    if (password.length < 6) {
-      throw new Error('La contrasena debe tener al menos 6 caracteres')
-    }
+    assertValidPassword(password)
 
     if (description && typeof description === 'string' && description.trim().length > 150) {
-      throw new Error('La descripcion no puede superar los 150 caracteres (maximo permitido)')
+      const err = new Error('La descripcion no puede superar los 150 caracteres (maximo permitido)')
+      ;(err as any).statusCode = 400
+      throw err
     }
 
     if (soundcloudUrl && typeof soundcloudUrl === 'string' && soundcloudUrl.trim() && !soundcloudUrl.toLowerCase().includes('soundcloud.com')) {
-      throw new Error('El enlace de SoundCloud debe ser una URL valida de SoundCloud (debe contener soundcloud.com)')
+      const err = new Error('El enlace de SoundCloud debe ser una URL valida de SoundCloud (debe contener soundcloud.com)')
+      ;(err as any).statusCode = 400
+      throw err
     }
     if (spotifyUrl && typeof spotifyUrl === 'string' && spotifyUrl.trim() && !spotifyUrl.toLowerCase().includes('spotify.com')) {
-      throw new Error('El enlace de Spotify debe ser una URL valida de Spotify (debe contener spotify.com)')
+      const err = new Error('El enlace de Spotify debe ser una URL valida de Spotify (debe contener spotify.com)')
+      ;(err as any).statusCode = 400
+      throw err
     }
 
     const checkRes = await query(`
@@ -100,10 +106,14 @@ export class AuthService {
     if (checkRes.rows.length > 0) {
       const existing = checkRes.rows[0]
       if (existing.email.toLowerCase() === email.trim().toLowerCase()) {
-        throw new Error('El correo electronico ya esta registrado')
+        const err = new Error('El correo electronico ya esta registrado')
+        ;(err as any).statusCode = 409
+        throw err
       }
       if (existing.nickname.toLowerCase() === nickname.trim().toLowerCase()) {
-        throw new Error('El nombre de usuario / artistico ya esta en uso')
+        const err = new Error('El nombre de usuario / artistico ya esta en uso')
+        ;(err as any).statusCode = 409
+        throw err
       }
     }
 
@@ -471,26 +481,7 @@ export class AuthService {
     const normalizedEmail = email.trim().toLowerCase()
     const cleanCode = code.trim()
 
-    if (newPass.length < 8) {
-      const err = new Error('La contrasena debe tener al menos 8 caracteres.')
-      ;(err as any).statusCode = 400
-      throw err
-    }
-    if (!/[A-Z]/.test(newPass)) {
-      const err = new Error('La contrasena debe incluir al menos una letra mayuscula.')
-      ;(err as any).statusCode = 400
-      throw err
-    }
-    if (!/[a-z]/.test(newPass)) {
-      const err = new Error('La contrasena debe incluir al menos una letra minuscula.')
-      ;(err as any).statusCode = 400
-      throw err
-    }
-    if (!/[0-9]/.test(newPass)) {
-      const err = new Error('La contrasena debe incluir al menos un numero.')
-      ;(err as any).statusCode = 400
-      throw err
-    }
+    assertValidPassword(newPass)
 
     // Verificar que exista registro valido y verificado
     const res = await query(`
@@ -529,6 +520,70 @@ export class AuthService {
     return {
       success: true,
       message: 'Contrasena actualizada exitosamente. Ya puedes iniciar sesion con tu nueva clave.',
+    }
+  }
+
+  /**
+   * Cambia la contrasena del usuario autenticado validando su clave actual
+   * y aplicando las mismas reglas de seguridad que el registro y la recuperacion.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword?: string
+  ) {
+    if (!userId) {
+      const err = new Error('Usuario no autenticado.')
+      ;(err as any).statusCode = 401
+      throw err
+    }
+
+    if (!currentPassword || !newPassword) {
+      const err = new Error('Debes ingresar tu contrasena actual y la nueva contrasena.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    assertValidPassword(newPassword)
+
+    if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+      const err = new Error('Las contrasenas nuevas no coinciden.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    const userRes = await query(`SELECT id, password FROM "User" WHERE id = $1 LIMIT 1;`, [userId])
+    if (userRes.rows.length === 0) {
+      const err = new Error('Usuario no encontrado.')
+      ;(err as any).statusCode = 404
+      throw err
+    }
+
+    const existingHash = userRes.rows[0].password
+    const isCurrentValid = await comparePassword(currentPassword, existingHash)
+    if (!isCurrentValid) {
+      const err = new Error('La contrasena actual es incorrecta.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    const isSameAsCurrent = await comparePassword(newPassword, existingHash)
+    if (isSameAsCurrent) {
+      const err = new Error('La nueva contrasena debe ser diferente a tu contrasena actual.')
+      ;(err as any).statusCode = 400
+      throw err
+    }
+
+    const hashedPassword = await hashPassword(newPassword)
+    await query(
+      `UPDATE "User" SET password = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2;`,
+      [hashedPassword, userId]
+    )
+
+    return {
+      success: true,
+      message: 'Contrasena actualizada exitosamente.',
     }
   }
 }

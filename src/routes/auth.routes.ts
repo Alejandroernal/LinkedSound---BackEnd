@@ -4,6 +4,7 @@ import {
   login,
   getMe,
   updateProfile,
+  changePassword,
   getGenres,
   getUsers,
   forgotPassword,
@@ -21,5 +22,6 @@ authRouter.post('/verify-reset-code', verifyResetCode)
 authRouter.post('/reset-password', resetPassword)
 authRouter.get('/me', authenticate, getMe)
 authRouter.put('/profile', authenticate, updateProfile)
+authRouter.put('/change-password', authenticate, changePassword)
 authRouter.get('/genres', getGenres)
 authRouter.get('/users', optionalAuthenticate, getUsers)
