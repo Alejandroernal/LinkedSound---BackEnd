@@ -139,32 +139,13 @@ export class PerfilesService {
       trackUrl,
     } = data
 
-    let normalizedEmail: string | null = null
-    if (email !== undefined && typeof email === 'string') {
+    if (email !== undefined && typeof email === 'string' && email.trim().length > 0) {
       const trimmedEmail = email.trim().toLowerCase()
-      if (!trimmedEmail) {
-        const err = new Error('El correo electronico es obligatorio')
-        ;(err as any).statusCode = 400
-        throw err
-      }
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-      if (!emailRegex.test(trimmedEmail)) {
-        const err = new Error('El formato del correo electronico no es valido')
-        ;(err as any).statusCode = 400
-        throw err
-      }
       if (trimmedEmail !== (user.email || '').toLowerCase()) {
-        const checkEmail = await query(
-          `SELECT id FROM "User" WHERE LOWER(email) = LOWER($1) AND id <> $2 LIMIT 1;`,
-          [trimmedEmail, userId]
-        )
-        if (checkEmail.rows.length > 0) {
-          const err = new Error('El correo electronico ya esta registrado por otra cuenta')
-          ;(err as any).statusCode = 409
-          throw err
-        }
+        const err = new Error('El correo electronico de la cuenta no puede modificarse.')
+        ;(err as any).statusCode = 400
+        throw err
       }
-      normalizedEmail = trimmedEmail
     }
 
     if (nickname && nickname.trim() !== user.nickname) {
@@ -276,10 +257,6 @@ export class PerfilesService {
       const updateVals: any[] = [userId]
       let pIdx = 2
 
-      if (normalizedEmail) {
-        updateFields.push(`email = $${pIdx++}`)
-        updateVals.push(normalizedEmail)
-      }
       if (firstName) {
         updateFields.push(`"firstName" = $${pIdx++}`)
         updateVals.push(String(firstName).trim())
