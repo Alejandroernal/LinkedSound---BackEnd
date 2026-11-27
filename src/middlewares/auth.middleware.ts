@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { verifyToken, TokenPayload } from '../utils/jwt.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 import { query } from '../config/db.js'
 
 export interface AuthenticatedRequest extends Request {
@@ -19,10 +20,7 @@ async function fetchLiveUserState(userId: string): Promise<LiveUserState | null>
     `
     SELECT u.id, u.email, u."accountRole",
            COALESCE(s.name, 'Active') AS status_name,
-           COALESCE(
-             (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-             'Artista'
-           ) AS role
+           ${getMusicalRoleSql('u')} AS role
     FROM "User" u
     LEFT JOIN "UserStatus" s ON u."statusId" = s.id
     WHERE u.id = $1

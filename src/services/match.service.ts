@@ -1,4 +1,5 @@
 import { query, getClient } from '../config/db.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 import { fcmService } from './fcm.service.js'
 import type {
   AffinityResult,
@@ -173,10 +174,7 @@ export class MatchService {
       const targetUserRes = await client.query(`
         SELECT 
           u.id, u."firstName", u."lastName", u.nickname, u."profileImage",
-          COALESCE(
-            (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-            'Artista'
-          ) AS role,
+          ${getMusicalRoleSql('u')} AS role,
           l."formattedAddress" AS location,
           ST_Y(l.geo_point::geometry) AS latitude,
           ST_X(l.geo_point::geometry) AS longitude
@@ -218,10 +216,7 @@ export class MatchService {
       const senderRes = await client.query(`
         SELECT 
           u.id, u."firstName", u."lastName", u.nickname,
-          COALESCE(
-            (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-            'Artista'
-          ) AS role,
+          ${getMusicalRoleSql('u')} AS role,
           ST_Y(l.geo_point::geometry) AS latitude,
           ST_X(l.geo_point::geometry) AS longitude
         FROM "User" u
@@ -514,10 +509,7 @@ export class MatchService {
     const partnersRes = await query(`
       SELECT 
         u.id, u."firstName", u."lastName", u.nickname, u."profileImage",
-        COALESCE(
-          (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-          'Artista'
-        ) AS role,
+        ${getMusicalRoleSql('u')} AS role,
         l."formattedAddress" AS location
       FROM "User" u
       LEFT JOIN "Location" l ON u."locationId" = l.id

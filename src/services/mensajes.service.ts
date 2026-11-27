@@ -1,4 +1,5 @@
 import { query, getClient } from '../config/db.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 import { fcmService } from './fcm.service.js'
 import type { SendMessageDTO } from '../models/mensajes.model.js'
 
@@ -16,10 +17,10 @@ export class MensajesService {
         c.id, c."user1Id", c."user2Id", c.pinned, c.muted, c.blocked,
         c."createdAt", c."updatedAt",
         u1."firstName" AS u1_firstname, u1."lastName" AS u1_lastname, u1.nickname AS u1_nickname, u1."profileImage" AS u1_image,
-        COALESCE((SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u1.id LIMIT 1), 'Artista') AS u1_role,
+        ${getMusicalRoleSql('u1')} AS u1_role,
         s1.name AS u1_status,
         u2."firstName" AS u2_firstname, u2."lastName" AS u2_lastname, u2.nickname AS u2_nickname, u2."profileImage" AS u2_image,
-        COALESCE((SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u2.id LIMIT 1), 'Artista') AS u2_role,
+        ${getMusicalRoleSql('u2')} AS u2_role,
         s2.name AS u2_status
       FROM "Conversation" c
       LEFT JOIN "User" u1 ON c."user1Id" = u1.id
@@ -172,16 +173,19 @@ export class MensajesService {
     const offset = (validPage - 1) * validLimit
 
     const { rows: messages } = await query(`
-      SELECT 
-        m.id, m."conversationId", m."senderId", m.text, m."isRead", m."readAt",
-        m."attachmentUrl", m."attachmentType", m."attachmentName", m."attachmentSize",
-        m."createdAt",
-        u."firstName", u."lastName", u.nickname, u."profileImage"
-      FROM "Message" m
-      LEFT JOIN "User" u ON m."senderId" = u.id
-      WHERE m."conversationId" = $1
-      ORDER BY m."createdAt" ASC
-      LIMIT $2 OFFSET $3;
+      SELECT * FROM (
+        SELECT 
+          m.id, m."conversationId", m."senderId", m.text, m."isRead", m."readAt",
+          m."attachmentUrl", m."attachmentType", m."attachmentName", m."attachmentSize",
+          m."createdAt",
+          u."firstName", u."lastName", u.nickname, u."profileImage"
+        FROM "Message" m
+        LEFT JOIN "User" u ON m."senderId" = u.id
+        WHERE m."conversationId" = $1
+        ORDER BY m."createdAt" DESC
+        LIMIT $2 OFFSET $3
+      ) latest_msgs
+      ORDER BY latest_msgs."createdAt" ASC;
     `, [conversationId, validLimit, offset])
 
     const formattedMessages = messages.map((m: any) => {

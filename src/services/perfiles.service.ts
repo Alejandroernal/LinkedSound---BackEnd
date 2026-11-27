@@ -1,5 +1,6 @@
 import { query, getClient } from '../config/db.js'
 import { assertValidPassword } from '../utils/password.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 import { uploadBase64ToCloudinary } from './upload.service.js'
 import type { UpdateProfileDTO, PerfilResponse } from '../models/perfiles.model.js'
 
@@ -75,10 +76,7 @@ export class PerfilesService {
     const userRes = await query(`
       SELECT 
         u.id, u.email, u."firstName", u."lastName", u.nickname,
-        COALESCE(
-          (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-          'Artista'
-        ) AS role,
+        ${getMusicalRoleSql('u')} AS role,
         u."accountRole", u."profileImage", u.description,
         u."soundcloudUrl", u."spotifyUrl", u."soundcloudHandle",
         u."locationId", u."statusId", u."reportsCount", u."createdAt", u."updatedAt",
@@ -454,10 +452,7 @@ export class PerfilesService {
     const sql = `
       SELECT 
         u.id, u.email, u."firstName", u."lastName", u.nickname, u."accountRole",
-        COALESCE(
-          (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-          'Artista'
-        ) AS role,
+        ${getMusicalRoleSql('u')} AS role,
         u.description, u."profileImage", u."soundcloudUrl", u."spotifyUrl",
         u."locationId", u."reportsCount", u."createdAt", u."updatedAt",
         s.name AS status_name,

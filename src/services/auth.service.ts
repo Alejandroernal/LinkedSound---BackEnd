@@ -1,6 +1,7 @@
 import { query, getClient } from '../config/db.js'
 import { hashPassword, comparePassword, assertValidPassword } from '../utils/password.js'
 import { generateToken } from '../utils/jwt.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 import { perfilesService, formatUserResponse } from './perfiles.service.js'
 import { emailService } from './email.service.js'
 
@@ -317,10 +318,7 @@ export class AuthService {
       SELECT 
         u.id, u.email, u.password, u."accountRole",
         s.name AS status_name,
-        COALESCE(
-          (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-          'Artista'
-        ) AS role
+        ${getMusicalRoleSql('u')} AS role
       FROM "User" u
       LEFT JOIN "UserStatus" s ON u."statusId" = s.id
       WHERE LOWER(u.email) = LOWER($1)

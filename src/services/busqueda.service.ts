@@ -1,4 +1,5 @@
 import { query } from '../config/db.js'
+import { getMusicalRoleSql } from '../utils/userRoleSql.js'
 
 export interface BusquedaFiltros {
   texto?: string
@@ -51,13 +52,27 @@ export class BusquedaService {
     }
 
     if (rol && rol.trim()) {
-      conditions.push(`EXISTS (
-        SELECT 1 FROM "UserRole" ur
-        JOIN "Role" r ON ur."roleId" = r.id
-        WHERE ur."userId" = u.id AND LOWER(r.name) = LOWER($${pIdx})
-      )`)
-      params.push(rol.trim())
-      pIdx++
+      const normalizedRol = rol.trim().toLowerCase()
+      if (normalizedRol === 'productor y artista' || normalizedRol === 'ambos') {
+        conditions.push(`(
+          EXISTS (
+            SELECT 1 FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id
+            WHERE ur."userId" = u.id AND r.name = 'Productor'
+          )
+          AND EXISTS (
+            SELECT 1 FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id
+            WHERE ur."userId" = u.id AND r.name = 'Artista'
+          )
+        )`)
+      } else {
+        conditions.push(`EXISTS (
+          SELECT 1 FROM "UserRole" ur
+          JOIN "Role" r ON ur."roleId" = r.id
+          WHERE ur."userId" = u.id AND LOWER(r.name) = LOWER($${pIdx}) AND r.name IN ('Productor', 'Artista')
+        )`)
+        params.push(rol.trim())
+        pIdx++
+      }
     }
 
     if (genero && genero.trim()) {
@@ -97,10 +112,7 @@ export class BusquedaService {
       SELECT 
         u.id, u."firstName", u."lastName", u.nickname, u."profileImage", u.description,
         u."soundcloudUrl", u."spotifyUrl", u."createdAt",
-        COALESCE(
-          (SELECT r.name FROM "UserRole" ur JOIN "Role" r ON ur."roleId" = r.id WHERE ur."userId" = u.id LIMIT 1),
-          'Artista'
-        ) AS role,
+        ${getMusicalRoleSql('u')} AS role,
         l."formattedAddress" AS location, l.city, l.province, l.country,
         ST_Y(l.geo_point::geometry) AS latitude,
         ST_X(l.geo_point::geometry) AS longitude,
